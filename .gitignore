@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables (보안!)
+.env
+.env.local
+.env.*.local
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+*.log
+staticfiles/
+
+# Media files (사용자 업로드)
+media/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets & Keys
+*.pem
+*.key
+secrets/
+
+# uv
+.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/

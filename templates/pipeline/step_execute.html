@@ -1,0 +1,206 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ step.display_name }} - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+            <li class="breadcrumb-item active">{{ step.display_name }}</li>
+        </ol>
+    </nav>
+    <h2>{{ step.display_name }}</h2>
+    {% if step.description %}
+    <p class="text-muted">{{ step.description }}</p>
+    {% endif %}
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-play-fill"></i> 실행 설정</h5>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+
+                    <!-- 입력 소스 선택 -->
+                    {% if step.can_run_independently %}
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">입력 소스</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="input_source" id="source_auto"
+                                   value="auto" {% if has_input %}checked{% endif %}>
+                            <label class="form-check-label" for="source_auto">
+                                이전 단계 출력 사용
+                                {% if step.requires_input_file %}
+                                <small class="text-muted">({{ step.requires_input_file }})</small>
+                                {% endif %}
+                                {% if has_input %}
+                                <span class="badge bg-success">파일 있음</span>
+                                {% else %}
+                                <span class="badge bg-warning">파일 없음</span>
+                                {% endif %}
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="input_source" id="source_manual"
+                                   value="manual" {% if not has_input %}checked{% endif %}>
+                            <label class="form-check-label" for="source_manual">
+                                직접 입력
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 수동 입력 영역 -->
+                    <div class="mb-4" id="manual_input_area">
+                        <label for="manual_input" class="form-label fw-bold">
+                            {% if step.manual_input_description %}
+                            {{ step.manual_input_description }}
+                            {% else %}
+                            입력 데이터
+                            {% endif %}
+                        </label>
+                        <textarea name="manual_input" id="manual_input" class="form-control"
+                                  rows="15" placeholder="대본 또는 JSON 데이터를 붙여넣으세요..."></textarea>
+                        <small class="text-muted">
+                            텍스트 또는 JSON 형식으로 입력하세요.
+                            {% if step.name == 'scene_planner' %}
+                            대본을 붙여넣으면 자동으로 씬 분할이 진행됩니다.
+                            {% endif %}
+                        </small>
+
+                        <!-- 글자수 카운터 -->
+                        <div class="mt-2">
+                            <span id="char_count" class="badge bg-secondary">0자</span>
+                            {% if step.name == 'script_writer' or step.name == 'scene_planner' %}
+                            <span class="text-muted small">/ 목표 8000자</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="bi bi-play-fill"></i> 실행
+                        </button>
+                        <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-secondary">
+                            <i class="bi bi-arrow-left"></i> 돌아가기
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <!-- 이전 실행 기록 -->
+        {% if previous_execution %}
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-clock-history"></i> 이전 실행</h6>
+            </div>
+            <div class="card-body">
+                <p class="mb-2">
+                    <span class="step-badge step-{{ previous_execution.status }}">
+                        {{ previous_execution.get_status_display }}
+                    </span>
+                </p>
+                <p class="small text-muted mb-1">
+                    시작: {{ previous_execution.started_at|date:"Y-m-d H:i:s" }}
+                </p>
+                {% if previous_execution.completed_at %}
+                <p class="small text-muted mb-1">
+                    완료: {{ previous_execution.completed_at|date:"Y-m-d H:i:s" }}
+                </p>
+                {% endif %}
+                {% if previous_execution.error_message %}
+                <div class="alert alert-danger small mt-2">
+                    {{ previous_execution.error_message|truncatechars:200 }}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 도움말 -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-info-circle"></i> 도움말</h6>
+            </div>
+            <div class="card-body small">
+                {% if step.name == 'script_writer' %}
+                <p>리서치 자료를 바탕으로 8000자 분량의 대본을 작성합니다.</p>
+                <ul>
+                    <li>목표 글자수: 7500~8500자</li>
+                    <li>친근한 어조로 작성</li>
+                    <li>뉴스 앵커 톤 금지</li>
+                </ul>
+                {% elif step.name == 'scene_planner' %}
+                <p>대본을 45-60개의 씬으로 분할합니다.</p>
+                <ul>
+                    <li>각 씬: 10-20초 분량</li>
+                    <li>캐릭터 등장 30% 이상</li>
+                    <li>narration_tts 자동 생성</li>
+                </ul>
+                {% elif step.name == 'scene_generator' %}
+                <p>각 씬의 이미지를 생성합니다.</p>
+                <ul>
+                    <li>Gemini 3 Pro 사용</li>
+                    <li>캐릭터 시트 먼저 생성</li>
+                    <li>1920x1080 해상도</li>
+                </ul>
+                {% else %}
+                <p>{{ step.description }}</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = document.getElementById('manual_input');
+    const counter = document.getElementById('char_count');
+    const sourceAuto = document.getElementById('source_auto');
+    const sourceManual = document.getElementById('source_manual');
+    const manualArea = document.getElementById('manual_input_area');
+
+    // 글자수 카운터
+    if (textarea && counter) {
+        textarea.addEventListener('input', function() {
+            const count = this.value.length;
+            counter.textContent = count + '자';
+
+            if (count >= 7500 && count <= 8500) {
+                counter.className = 'badge bg-success';
+            } else if (count >= 7000 || count > 8500) {
+                counter.className = 'badge bg-warning';
+            } else {
+                counter.className = 'badge bg-secondary';
+            }
+        });
+    }
+
+    // 입력 소스 토글
+    function toggleManualInput() {
+        if (sourceManual && sourceManual.checked) {
+            manualArea.style.display = 'block';
+        } else {
+            manualArea.style.display = 'none';
+        }
+    }
+
+    if (sourceAuto) {
+        sourceAuto.addEventListener('change', toggleManualInput);
+        sourceManual.addEventListener('change', toggleManualInput);
+        toggleManualInput();
+    }
+});
+</script>
+{% endblock %}

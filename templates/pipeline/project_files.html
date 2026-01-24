@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% load pipeline_tags %}
+
+{% block title %}파일 목록 - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+            <li class="breadcrumb-item active">파일 목록</li>
+        </ol>
+    </nav>
+    <h2><i class="bi bi-folder2-open"></i> 파일 목록</h2>
+    <p class="text-muted">프로젝트 폴더: {{ project.folder_name }}</p>
+</div>
+
+{% if files %}
+<div class="card">
+    <div class="card-body">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>파일명</th>
+                    <th>크기</th>
+                    <th>작업</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for file in files %}
+                <tr>
+                    <td>
+                        {% if file.name|slice:"-4:" == ".png" or file.name|slice:"-4:" == ".jpg" %}
+                        <i class="bi bi-image text-primary"></i>
+                        {% elif file.name|slice:"-4:" == ".mp4" %}
+                        <i class="bi bi-film text-success"></i>
+                        {% elif file.name|slice:"-5:" == ".json" %}
+                        <i class="bi bi-filetype-json text-warning"></i>
+                        {% elif file.name|slice:"-4:" == ".wav" or file.name|slice:"-4:" == ".mp3" %}
+                        <i class="bi bi-music-note text-info"></i>
+                        {% elif file.name|slice:"-4:" == ".srt" or file.name|slice:"-4:" == ".ass" %}
+                        <i class="bi bi-subtitles text-secondary"></i>
+                        {% else %}
+                        <i class="bi bi-file-earmark"></i>
+                        {% endif %}
+                        {{ file.name }}
+                    </td>
+                    <td>
+                        {% if file.size < 1024 %}
+                        {{ file.size }} B
+                        {% elif file.size < 1048576 %}
+                        {{ file.size|floatformat:0|divisibleby:1024 }} KB
+                        {% else %}
+                        {{ file.size|floatformat:1|divisibleby:1048576 }} MB
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{% url 'pipeline:download_file' project.pk file.name %}"
+                           class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-download"></i> 다운로드
+                        </a>
+                        {% if file.name|slice:"-4:" == ".png" or file.name|slice:"-4:" == ".jpg" %}
+                        <button class="btn btn-sm btn-outline-secondary"
+                                onclick="previewImage('{% url 'pipeline:download_file' project.pk file.name %}')">
+                            <i class="bi bi-eye"></i> 미리보기
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle"></i> 아직 생성된 파일이 없습니다.
+</div>
+{% endif %}
+
+<!-- 이미지 미리보기 모달 -->
+<div class="modal fade" id="imageModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">이미지 미리보기</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="previewImg" src="" alt="미리보기" class="img-fluid">
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function previewImage(url) {
+    document.getElementById('previewImg').src = url;
+    new bootstrap.Modal(document.getElementById('imageModal')).show();
+}
+</script>
+{% endblock %}

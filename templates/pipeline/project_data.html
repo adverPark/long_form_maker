@@ -1,0 +1,313 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ project.name }} 데이터 - 롱폼 영상 제작{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-1">
+                <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
+                <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+                <li class="breadcrumb-item active">데이터</li>
+            </ol>
+        </nav>
+        <h2>{{ project.name }} - 데이터</h2>
+    </div>
+    <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left"></i> 돌아가기
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <!-- 주제 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 1. 주제</h5>
+            </div>
+            <div class="card-body">
+                {% if topic %}
+                <table class="table table-sm">
+                    <tr><th width="100">제목</th><td>{{ topic.title }}</td></tr>
+                    {% if topic.url %}<tr><th>URL</th><td><a href="{{ topic.url }}" target="_blank">{{ topic.url|truncatechars:50 }}</a></td></tr>{% endif %}
+                    {% if topic.channel %}<tr><th>채널</th><td>{{ topic.channel }}</td></tr>{% endif %}
+                    {% if topic.view_count %}<tr><th>조회수</th><td>{{ topic.view_count|floatformat:0 }}</td></tr>{% endif %}
+                    {% if topic.viral_ratio %}<tr><th>바이럴</th><td>{{ topic.viral_ratio|floatformat:1 }}x</td></tr>{% endif %}
+                    {% if topic.reason %}<tr><th>메모</th><td>{{ topic.reason }}</td></tr>{% endif %}
+                </table>
+                {% else %}
+                <p class="text-muted">아직 주제가 입력되지 않았습니다.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 대본 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-text"></i> 3. 대본</h5>
+            </div>
+            <div class="card-body">
+                {% if draft %}
+                <h6>{{ draft.title }}</h6>
+                <p class="text-muted">글자수: {{ draft.char_count }}자</p>
+                <pre class="bg-light p-3" style="max-height: 400px; overflow-y: auto; white-space: pre-wrap;">{{ draft.content }}</pre>
+                {% else %}
+                <p class="text-muted">아직 대본이 작성되지 않았습니다.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <!-- 리서치 -->
+        <div class="card mb-4" id="research">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-search"></i> 2. 리서치</h5>
+            </div>
+            <div class="card-body">
+                {% if research %}
+                <h5 class="mb-3">{{ research.topic }}</h5>
+
+                {% if research.best_title %}
+                <div class="alert alert-success py-2">
+                    <strong>선정 제목:</strong> {{ research.best_title.title }}<br>
+                    <small class="text-muted">패턴: {{ research.best_title.pattern }} | 훅: {{ research.best_title.hook|truncatechars:50 }}</small>
+                </div>
+                {% endif %}
+
+                {% if research.summary %}
+                <p><strong>요약:</strong> {{ research.summary }}</p>
+                {% endif %}
+
+                <!-- 인용구 -->
+                {% if research.quotes %}
+                <details class="mb-3">
+                    <summary><strong>인용구 ({{ research.quotes|length }}개)</strong></summary>
+                    <ul class="mt-2">
+                        {% for q in research.quotes %}
+                        <li>
+                            "{{ q.quote }}"
+                            <br><small class="text-muted">- {{ q.source }} ({{ q.emotion }}) → {{ q.usable_for }}</small>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+
+                <!-- 숫자/통계 -->
+                {% if research.numbers %}
+                <details class="mb-3">
+                    <summary><strong>숫자/통계 ({{ research.numbers|length }}개)</strong></summary>
+                    <ul class="mt-2">
+                        {% for n in research.numbers %}
+                        <li>
+                            <strong>{{ n.number }}</strong> - {{ n.context }}
+                            <br><small class="text-muted">임팩트: {{ n.impact }}</small>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+
+                <!-- 인물 사례 -->
+                {% if research.person_stories %}
+                <details class="mb-3">
+                    <summary><strong>인물 사례 ({{ research.person_stories|length }}개)</strong></summary>
+                    <div class="mt-2">
+                        {% for p in research.person_stories %}
+                        <div class="border-start border-3 border-primary ps-3 mb-2">
+                            <strong>{{ p.name }}</strong> ({{ p.age }}, {{ p.career }})<br>
+                            <small>과거: {{ p.past }}</small><br>
+                            <small>현재: {{ p.present }}</small><br>
+                            <small class="text-primary">"{{ p.quote }}"</small>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- 시간 변화 -->
+                {% if research.time_change %}
+                <details class="mb-3">
+                    <summary><strong>시간 변화 스토리</strong></summary>
+                    <div class="mt-2">
+                        {% if research.time_change.past %}
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="badge bg-secondary me-2">과거</span>
+                            <span>{{ research.time_change.past.year }} - {{ research.time_change.past.situation }}</span>
+                        </div>
+                        {% endif %}
+                        {% if research.time_change.turning_point %}
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="badge bg-warning me-2">전환점</span>
+                            <span>{{ research.time_change.turning_point.year }} - {{ research.time_change.turning_point.event }}</span>
+                        </div>
+                        {% endif %}
+                        {% if research.time_change.present %}
+                        <div class="d-flex align-items-center">
+                            <span class="badge bg-danger me-2">현재</span>
+                            <span>{{ research.time_change.present.year }} - {{ research.time_change.present.situation }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- 역설 -->
+                {% if research.paradox %}
+                <details class="mb-3">
+                    <summary><strong>역설/반전 요소</strong></summary>
+                    <div class="mt-2 bg-light p-2 rounded">
+                        <small class="text-muted">상식:</small> {{ research.paradox.common_belief }}<br>
+                        <small class="text-muted">현실:</small> {{ research.paradox.reality }}<br>
+                        <small class="text-muted">통찰:</small> <strong>{{ research.paradox.insight }}</strong>
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- 시청자 연결 -->
+                {% if research.viewer_connection %}
+                <details class="mb-3">
+                    <summary><strong>시청자 연결</strong></summary>
+                    <div class="mt-2">
+                        <small class="text-muted">직접 영향:</small> {{ research.viewer_connection.direct_impact }}<br>
+                        <small class="text-muted">간접 영향:</small> {{ research.viewer_connection.indirect_impact }}<br>
+                        <small class="text-muted">자기 점검:</small> <strong>{{ research.viewer_connection.self_check }}</strong>
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- 서사 구조 -->
+                {% if research.narrative_structure %}
+                <details class="mb-3">
+                    <summary><strong>서사 구조</strong></summary>
+                    <div class="mt-2">
+                        {% if research.narrative_structure.intro %}
+                        <div class="mb-2">
+                            <span class="badge bg-info">인트로</span>
+                            <small>훅: {{ research.narrative_structure.intro.hook }}</small>
+                        </div>
+                        {% endif %}
+                        {% if research.narrative_structure.act1 %}
+                        <div class="mb-2">
+                            <span class="badge bg-primary">Act 1</span>
+                            <small>{{ research.narrative_structure.act1.title }}</small>
+                        </div>
+                        {% endif %}
+                        {% if research.narrative_structure.act2 %}
+                        <div class="mb-2">
+                            <span class="badge bg-primary">Act 2</span>
+                            <small>{{ research.narrative_structure.act2.title }}</small>
+                        </div>
+                        {% endif %}
+                        {% if research.narrative_structure.act3 %}
+                        <div class="mb-2">
+                            <span class="badge bg-primary">Act 3</span>
+                            <small>{{ research.narrative_structure.act3.title }}</small>
+                        </div>
+                        {% endif %}
+                        {% if research.narrative_structure.conclusion %}
+                        <div>
+                            <span class="badge bg-success">결론</span>
+                            <small>{{ research.narrative_structure.conclusion.summary }}</small>
+                        </div>
+                        {% endif %}
+                    </div>
+                </details>
+                {% endif %}
+
+                <!-- 제목 후보 -->
+                {% if research.title_candidates %}
+                <details class="mb-3">
+                    <summary><strong>제목 후보 ({{ research.title_candidates|length }}개)</strong></summary>
+                    <ol class="mt-2">
+                        {% for t in research.title_candidates %}
+                        <li>{{ t }}</li>
+                        {% endfor %}
+                    </ol>
+                </details>
+                {% endif %}
+
+                <!-- 출처 -->
+                {% if research.sources %}
+                <details class="mb-3">
+                    <summary><strong>출처 ({{ research.sources|length }}개)</strong></summary>
+                    <ul class="mt-2" style="font-size: 0.85em;">
+                        {% for s in research.sources %}
+                        <li>
+                            <a href="{{ s.url }}" target="_blank">{{ s.title|default:"링크" }}</a>
+                            {% if s.publisher %}<small class="text-muted">({{ s.publisher }})</small>{% endif %}
+                            {% if s.key_info %}<br><small class="text-muted">{{ s.key_info }}</small>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+
+                <!-- 원본 자막 -->
+                {% if research.transcript %}
+                <details>
+                    <summary><strong>원본 자막</strong></summary>
+                    <pre class="bg-light p-2 mt-2" style="max-height: 200px; overflow-y: auto; font-size: 0.8em;">{{ research.transcript }}</pre>
+                </details>
+                {% endif %}
+
+                {% else %}
+                <p class="text-muted">아직 리서치가 완료되지 않았습니다.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 씬 목록 -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-collection-play"></i> 4. 씬 목록 ({{ scenes.count }}개)</h5>
+    </div>
+    <div class="card-body">
+        {% if scenes %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th width="50">#</th>
+                        <th width="80">섹션</th>
+                        <th>나레이션</th>
+                        <th width="60">캐릭터</th>
+                        <th width="60">길이</th>
+                        <th width="80">이미지</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for scene in scenes %}
+                    <tr>
+                        <td>{{ scene.scene_number }}</td>
+                        <td><span class="badge bg-secondary">{{ scene.get_section_display }}</span></td>
+                        <td>
+                            {{ scene.narration|truncatechars:100 }}
+                            {% if scene.image_prompt %}
+                            <br><small class="text-muted">프롬프트: {{ scene.image_prompt|truncatechars:50 }}</small>
+                            {% endif %}
+                        </td>
+                        <td>{% if scene.has_character %}<i class="bi bi-person-fill text-success"></i>{% else %}-{% endif %}</td>
+                        <td>{{ scene.duration|floatformat:1 }}s</td>
+                        <td>
+                            {% if scene.image %}
+                            <img src="{{ scene.image.url }}" alt="씬 {{ scene.scene_number }}" style="max-height: 40px;">
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">아직 씬이 생성되지 않았습니다.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+
+{% block title %}새 프로젝트 - 롱폼 영상 제작{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h4 class="mb-0"><i class="bi bi-plus-lg"></i> 새 프로젝트</h4>
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label for="name" class="form-label">프로젝트 이름</label>
+                        <input type="text" name="name" id="name" class="form-control"
+                               placeholder="예: 금리 인상의 영향" required autofocus>
+                        <small class="text-muted">영상 제목과 관련된 이름을 입력하세요.</small>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg"></i> 생성
+                        </button>
+                        <a href="{% url 'pipeline:dashboard' %}" class="btn btn-secondary">
+                            <i class="bi bi-x-lg"></i> 취소
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

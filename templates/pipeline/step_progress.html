@@ -1,0 +1,279 @@
+{% extends 'base.html' %}
+
+{% block title %}진행 중 - {{ execution.step.display_name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+.log-container {
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.85em;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 15px;
+    border-radius: 8px;
+}
+.log-entry {
+    margin-bottom: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid #333;
+}
+.log-time {
+    color: #888;
+    margin-right: 10px;
+}
+.log-type-info { color: #4fc1ff; }
+.log-type-search { color: #dcdcaa; }
+.log-type-result { color: #4ec9b0; }
+.log-type-error { color: #f14c4c; }
+.log-data {
+    margin-top: 5px;
+    padding-left: 20px;
+    color: #9cdcfe;
+    font-size: 0.9em;
+}
+.log-source {
+    color: #ce9178;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+            <li class="breadcrumb-item active">{{ execution.step.display_name }}</li>
+        </ol>
+    </nav>
+</div>
+
+<div class="row">
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-body text-center">
+                <h3 class="mb-3">{{ execution.step.display_name }}</h3>
+
+                <!-- 모델 정보 -->
+                <div class="mb-3">
+                    <span class="badge bg-secondary">
+                        <i class="bi bi-cpu"></i>
+                        {% if execution.model_type == 'pro' %}Gemini 3 Pro{% else %}Gemini 3 Flash{% endif %}
+                    </span>
+                </div>
+
+                <!-- 상태 표시 -->
+                <div class="mb-4">
+                    <span id="status-badge" class="badge fs-6
+                        {% if execution.status == 'running' %}bg-primary
+                        {% elif execution.status == 'completed' %}bg-success
+                        {% elif execution.status == 'failed' %}bg-danger
+                        {% else %}bg-secondary{% endif %}">
+                        {{ execution.get_status_display }}
+                    </span>
+                </div>
+
+                <!-- 프로그레스 바 -->
+                <div class="progress mb-3" style="height: 30px;">
+                    <div id="progress-bar"
+                         class="progress-bar progress-bar-striped progress-bar-animated"
+                         role="progressbar"
+                         style="width: {{ execution.progress_percent }}%"
+                         aria-valuenow="{{ execution.progress_percent }}"
+                         aria-valuemin="0"
+                         aria-valuemax="100">
+                        <span id="progress-text">{{ execution.progress_percent }}%</span>
+                    </div>
+                </div>
+
+                <!-- 진행 메시지 -->
+                <p id="progress-message" class="text-muted mb-4">
+                    {{ execution.progress_message|default:"처리 중..." }}
+                </p>
+
+                <!-- 에러 메시지 -->
+                <div id="error-container" class="alert alert-danger" style="display: none;">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <span id="error-message"></span>
+                </div>
+
+                <!-- 버튼 -->
+                <div class="mt-4">
+                    <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-secondary">
+                        <i class="bi bi-arrow-left"></i> 돌아가기
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-terminal"></i> 실행 로그</h5>
+            </div>
+            <div class="card-body p-0">
+                <div id="log-container" class="log-container">
+                    <div class="text-muted text-center py-4">로그를 불러오는 중...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class ProgressPoller {
+    constructor(executionId, projectPk) {
+        this.executionId = executionId;
+        this.projectPk = projectPk;
+        this.interval = 1500;  // 1.5초
+        this.timer = null;
+        this.isPolling = false;
+        this.lastLogCount = 0;
+    }
+
+    start() {
+        if (this.isPolling) return;
+        this.isPolling = true;
+        this.poll();
+    }
+
+    stop() {
+        this.isPolling = false;
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+    }
+
+    async poll() {
+        if (!this.isPolling) return;
+
+        try {
+            const response = await fetch(`/pipeline/project/${this.projectPk}/progress/${this.executionId}/api/`);
+            const data = await response.json();
+
+            this.updateUI(data);
+            this.updateLogs(data.logs || []);
+
+            if (data.status === 'completed' || data.status === 'failed') {
+                this.stop();
+                if (data.status === 'completed') {
+                    setTimeout(() => {
+                        window.location.href = `/pipeline/project/${this.projectPk}/`;
+                    }, 2000);
+                }
+            } else {
+                this.timer = setTimeout(() => this.poll(), this.interval);
+            }
+        } catch (error) {
+            console.error('Polling error:', error);
+            this.timer = setTimeout(() => this.poll(), this.interval * 2);
+        }
+    }
+
+    updateUI(data) {
+        // 프로그레스 바
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        progressBar.style.width = data.progress_percent + '%';
+        progressBar.setAttribute('aria-valuenow', data.progress_percent);
+        progressText.textContent = data.progress_percent + '%';
+
+        // 상태 배지
+        const statusBadge = document.getElementById('status-badge');
+        const statusClasses = {
+            'pending': 'bg-secondary',
+            'running': 'bg-primary',
+            'completed': 'bg-success',
+            'failed': 'bg-danger'
+        };
+        statusBadge.className = 'badge fs-6 ' + (statusClasses[data.status] || 'bg-secondary');
+
+        const statusText = {
+            'pending': '대기',
+            'running': '실행 중',
+            'completed': '완료',
+            'failed': '실패'
+        };
+        statusBadge.textContent = statusText[data.status] || data.status;
+
+        // 진행 메시지
+        document.getElementById('progress-message').textContent =
+            data.progress_message || '처리 중...';
+
+        // 에러 메시지
+        if (data.error_message) {
+            document.getElementById('error-container').style.display = 'block';
+            document.getElementById('error-message').textContent = data.error_message;
+        }
+
+        // 완료 시 프로그레스 바 색상 변경
+        if (data.status === 'completed') {
+            progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            progressBar.classList.add('bg-success');
+        } else if (data.status === 'failed') {
+            progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            progressBar.classList.add('bg-danger');
+        }
+    }
+
+    updateLogs(logs) {
+        if (logs.length === this.lastLogCount) return;
+        this.lastLogCount = logs.length;
+
+        const container = document.getElementById('log-container');
+
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center py-4">아직 로그가 없습니다.</div>';
+            return;
+        }
+
+        let html = '';
+        for (const log of logs) {
+            html += `<div class="log-entry">`;
+            html += `<span class="log-time">[${log.time}]</span>`;
+            html += `<span class="log-type-${log.type}">${this.getTypeIcon(log.type)} ${log.message}</span>`;
+
+            if (log.data) {
+                html += `<div class="log-data">`;
+                if (log.data.queries && log.data.queries.length > 0) {
+                    html += `검색어: ${log.data.queries.join(', ')}<br>`;
+                }
+                if (log.data.sources_count !== undefined) {
+                    html += `출처: ${log.data.sources_count}개<br>`;
+                }
+                if (log.data.text_preview) {
+                    html += `<span class="log-source">"${log.data.text_preview}..."</span>`;
+                }
+                html += `</div>`;
+            }
+            html += `</div>`;
+        }
+
+        container.innerHTML = html;
+        container.scrollTop = container.scrollHeight;
+    }
+
+    getTypeIcon(type) {
+        const icons = {
+            'info': 'ℹ️',
+            'search': '🔍',
+            'result': '✅',
+            'error': '❌'
+        };
+        return icons[type] || '•';
+    }
+}
+
+// 페이지 로드 시 폴링 시작
+document.addEventListener('DOMContentLoaded', function() {
+    const poller = new ProgressPoller({{ execution.pk }}, {{ project.pk }});
+    poller.start();
+});
+</script>
+{% endblock %}
