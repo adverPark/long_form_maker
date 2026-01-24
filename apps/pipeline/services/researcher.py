@@ -215,7 +215,7 @@ class ResearcherService(BaseStepService):
 
         data['searches'].append({
             'query': query,
-            'text': text[:2000],  # 텍스트는 2000자로 제한
+            'summary': text,  # 전체 요약 저장 (잘리지 않음)
             'sources': sources
         })
 
@@ -238,7 +238,9 @@ class ResearcherService(BaseStepService):
         context = "\n\n## 이전에 검색한 내용:\n"
         for i, search in enumerate(searches, 1):
             context += f"\n### 검색 {i}: {search['query']}\n"
-            context += search.get('text', '')[:500] + "...\n"
+            # 전체 요약 사용 (summary 필드)
+            summary = search.get('summary', search.get('text', ''))
+            context += summary[:1000] + ("..." if len(summary) > 1000 else "") + "\n"
 
         return context
 
@@ -316,11 +318,14 @@ class ResearcherService(BaseStepService):
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                return client.models.generate_content(
+                response = client.models.generate_content(
                     model=model_name,
                     contents=contents,
                     config=config
                 )
+                # 토큰 사용량 추적
+                self.track_usage(response, model_name)
+                return response
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
@@ -517,6 +522,16 @@ search_web 도구로 필요한 정보를 검색하세요.
                 seen_urls.add(url)
                 unique_sources.append(src)
 
+        # 기사별 요약 (intermediate_data에서 추출)
+        article_summaries = []
+        intermediate = self.execution.intermediate_data or {}
+        for search in intermediate.get('searches', []):
+            article_summaries.append({
+                'query': search.get('query', ''),
+                'summary': search.get('summary', ''),
+                'sources': search.get('sources', [])
+            })
+
         Research.objects.update_or_create(
             project=self.project,
             defaults={
@@ -534,7 +549,8 @@ search_web 도구로 필요한 정보를 검색하세요.
                 'viewer_connection': result.get('viewer_connection', {}),
                 'narrative_structure': result.get('narrative_structure', {}),
                 'sources': unique_sources[:20],
+                'article_summaries': article_summaries,
             }
         )
 
-        self.log(f'저장 완료: 출처 {len(unique_sources)}개', 'info')
+        self.log(f'저장 완료: 출처 {len(unique_sources)}개, 기사 요약 {len(article_summaries)}개', 'info')

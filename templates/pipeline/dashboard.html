@@ -49,11 +49,8 @@
                 </div>
             </div>
             <div class="card-footer">
-                <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-eye"></i> 상세보기
-                </a>
-                <a href="{% url 'pipeline:project_data' project.pk %}" class="btn btn-sm btn-outline-secondary">
-                    <i class="bi bi-database"></i> 데이터
+                <a href="{% url 'pipeline:project_data' project.pk %}" class="btn btn-sm btn-primary">
+                    <i class="bi bi-folder-fill"></i> 열기
                 </a>
             </div>
         </div>

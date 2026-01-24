@@ -176,14 +176,46 @@
                     <small class="text-muted">
                         인용구 {{ project.research.quotes|length }}개 |
                         숫자 {{ project.research.numbers|length }}개 |
-                        인물 {{ project.research.person_stories|length }}개 |
-                        출처 {{ project.research.sources|length }}개
+                        인물 {{ project.research.person_stories|length }}개
                     </small>
+                    {% if execution.total_tokens %}
+                    <div class="mt-2 pt-2 border-top">
+                        <small class="text-muted">
+                            <i class="bi bi-cpu"></i> {{ execution.total_tokens }} 토큰
+                            | <span class="text-primary">${{ execution.estimated_cost }}</span>
+                        </small>
+                    </div>
+                    {% endif %}
                 </div>
                 {% elif step.name == 'script_writer' and project.draft %}
                 <div class="data-preview mb-3">
-                    <strong>{{ project.draft.title }}</strong> ({{ project.draft.char_count }}자)<br>
-                    <small>{{ project.draft.content|truncatechars:150 }}</small>
+                    <div class="d-flex justify-content-between align-items-start">
+                        <strong>{{ project.draft.title }}</strong>
+                        <a href="{% url 'pipeline:project_data' project.pk %}#draft" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-eye"></i> 상세
+                        </a>
+                    </div>
+                    <div class="mt-1">
+                        <span class="badge bg-{% if project.draft.char_count >= 7500 and project.draft.char_count <= 8500 %}success{% elif project.draft.char_count >= 7000 %}warning{% else %}danger{% endif %}">
+                            {{ project.draft.char_count }}자
+                        </span>
+                        {% if project.draft.char_count < 7500 %}
+                        <small class="text-danger ms-1">목표 미달</small>
+                        {% elif project.draft.char_count > 8500 %}
+                        <small class="text-warning ms-1">목표 초과</small>
+                        {% else %}
+                        <small class="text-success ms-1">목표 달성</small>
+                        {% endif %}
+                    </div>
+                    <small class="text-muted">{{ project.draft.content|truncatechars:100 }}</small>
+                    {% if execution.total_tokens %}
+                    <div class="mt-2 pt-2 border-top">
+                        <small class="text-muted">
+                            <i class="bi bi-cpu"></i> {{ execution.total_tokens }} 토큰
+                            | <span class="text-primary">${{ execution.estimated_cost }}</span>
+                        </small>
+                    </div>
+                    {% endif %}
                 </div>
                 {% elif step.name == 'scene_planner' and scene_count > 0 %}
                 <div class="data-preview mb-3">

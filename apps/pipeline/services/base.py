@@ -1,4 +1,5 @@
 import traceback
+from decimal import Decimal
 from abc import ABC, abstractmethod
 from django.conf import settings
 from google import genai
@@ -15,6 +16,18 @@ GEMINI_MODELS = {
 
 # 기본 모델
 DEFAULT_MODEL = 'flash'
+
+# Gemini 가격 (USD per 1M tokens)
+GEMINI_PRICING = {
+    'gemini-3-flash-preview': {
+        'input': Decimal('0.50'),   # $0.50 / 1M tokens
+        'output': Decimal('3.00'),  # $3.00 / 1M tokens
+    },
+    'gemini-3-pro-preview': {
+        'input': Decimal('2.00'),   # $2.00 / 1M tokens
+        'output': Decimal('12.00'), # $12.00 / 1M tokens
+    },
+}
 
 
 class BaseStepService(ABC):
@@ -108,6 +121,77 @@ class BaseStepService(ABC):
         model_type = model_type or self.get_user_model_preference()
         return GEMINI_MODELS.get(model_type, GEMINI_MODELS[DEFAULT_MODEL])
 
+    def track_usage(self, response, model_name: str = None):
+        """토큰 사용량 추적 및 비용 계산
+
+        Args:
+            response: Gemini API 응답 객체
+            model_name: 사용한 모델명
+        """
+        model_name = model_name or self.get_model_name()
+
+        # 토큰 정보 추출 시도
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+
+        # 방법 1: usage_metadata (구 버전)
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage = response.usage_metadata
+            input_tokens = getattr(usage, 'prompt_token_count', 0) or 0
+            output_tokens = getattr(usage, 'candidates_token_count', 0) or 0
+            total_tokens = getattr(usage, 'total_token_count', 0) or 0
+
+        # 방법 2: usage (신 버전 SDK)
+        if not total_tokens and hasattr(response, 'usage') and response.usage:
+            usage = response.usage
+            input_tokens = getattr(usage, 'input_tokens', 0) or getattr(usage, 'prompt_tokens', 0) or 0
+            output_tokens = getattr(usage, 'output_tokens', 0) or getattr(usage, 'completion_tokens', 0) or 0
+            total_tokens = input_tokens + output_tokens
+
+        # 방법 3: model_dump() 또는 dict로 변환해서 찾기
+        if not total_tokens:
+            try:
+                if hasattr(response, 'model_dump'):
+                    resp_dict = response.model_dump()
+                elif hasattr(response, '__dict__'):
+                    resp_dict = response.__dict__
+                else:
+                    resp_dict = {}
+
+                # usage_metadata 키 찾기
+                usage_data = resp_dict.get('usage_metadata') or resp_dict.get('usage') or {}
+                if usage_data:
+                    input_tokens = usage_data.get('prompt_token_count') or usage_data.get('input_tokens') or 0
+                    output_tokens = usage_data.get('candidates_token_count') or usage_data.get('output_tokens') or 0
+                    total_tokens = usage_data.get('total_token_count') or (input_tokens + output_tokens)
+            except Exception:
+                pass
+
+        if not total_tokens:
+            # 토큰 정보를 찾지 못함 - 로그 남기기
+            self.log(f'토큰 정보 없음 (response type: {type(response).__name__})', 'info')
+            return
+
+        # 누적
+        self.execution.input_tokens += input_tokens
+        self.execution.output_tokens += output_tokens
+        self.execution.total_tokens += total_tokens
+
+        # 비용 계산
+        pricing = GEMINI_PRICING.get(model_name, GEMINI_PRICING['gemini-3-flash-preview'])
+        input_cost = (Decimal(input_tokens) / Decimal('1000000')) * pricing['input']
+        output_cost = (Decimal(output_tokens) / Decimal('1000000')) * pricing['output']
+        self.execution.estimated_cost += input_cost + output_cost
+
+        # DB 저장
+        self.execution.save(update_fields=[
+            'input_tokens', 'output_tokens', 'total_tokens', 'estimated_cost'
+        ])
+
+        # 로그
+        self.log(f'토큰: {input_tokens:,} + {output_tokens:,} = {total_tokens:,} (${float(self.execution.estimated_cost):.4f})')
+
     def call_gemini(self, prompt: str, model_type: str = None) -> str:
         """Gemini API 호출 (기본)"""
         client = self.get_client()
@@ -117,6 +201,10 @@ class BaseStepService(ABC):
             model=model_name,
             contents=prompt,
         )
+
+        # 토큰 사용량 추적
+        self.track_usage(response, model_name)
+
         return response.text
 
     def call_gemini_with_search(self, prompt: str, model_type: str = None) -> dict:
@@ -142,6 +230,9 @@ class BaseStepService(ABC):
             contents=prompt,
             config=types.GenerateContentConfig(tools=[search_tool])
         )
+
+        # 토큰 사용량 추적
+        self.track_usage(response, model_name)
 
         # 결과 파싱
         result = {

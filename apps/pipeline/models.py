@@ -156,6 +156,10 @@ class Research(models.Model):
     # [{"title": "...", "url": "...", "publisher": "...", "key_info": "..."}]
     sources = models.JSONField(default=list, verbose_name="출처")
 
+    # 기사별 요약 (검색 결과 전체 보존)
+    # [{"query": "검색어", "summary": "요약 내용", "sources": [...]}]
+    article_summaries = models.JSONField(default=list, verbose_name="기사별 요약")
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -280,6 +284,12 @@ class StepExecution(models.Model):
     # 중간 저장 데이터 (이어하기용)
     intermediate_data = models.JSONField(default=dict, verbose_name="중간 데이터")
 
+    # 토큰 사용량 & 비용
+    input_tokens = models.IntegerField(default=0, verbose_name="입력 토큰")
+    output_tokens = models.IntegerField(default=0, verbose_name="출력 토큰")
+    total_tokens = models.IntegerField(default=0, verbose_name="총 토큰")
+    estimated_cost = models.DecimalField(max_digits=10, decimal_places=6, default=0, verbose_name="예상 비용(USD)")
+
     # 에러
     error_message = models.TextField(blank=True, verbose_name="에러 메시지")
 
@@ -319,7 +329,6 @@ class StepExecution(models.Model):
             message: 로그 메시지
             data: 추가 데이터 (검색 결과 등)
         """
-        from django.utils import timezone
         log_entry = {
             'time': timezone.now().strftime('%H:%M:%S'),
             'type': log_type,
@@ -328,6 +337,8 @@ class StepExecution(models.Model):
         if data:
             log_entry['data'] = data
 
+        if self.logs is None:
+            self.logs = []
         self.logs.append(log_entry)
         self.save(update_fields=['logs'])
 

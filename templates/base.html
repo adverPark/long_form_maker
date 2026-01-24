@@ -21,24 +21,8 @@
         .navbar {
             background-color: #343a40 !important;
         }
-        .sidebar {
-            background-color: #fff;
-            min-height: calc(100vh - 56px);
-            border-right: 1px solid #dee2e6;
-        }
-        .sidebar .nav-link {
-            color: #495057;
-            padding: 0.75rem 1rem;
-        }
-        .sidebar .nav-link:hover {
-            background-color: #e9ecef;
-        }
-        .sidebar .nav-link.active {
-            background-color: var(--primary-color);
-            color: white;
-        }
         .main-content {
-            padding: 2rem;
+            padding: 1.5rem;
         }
         .card {
             border: none;
@@ -91,37 +75,7 @@
 
     <div class="container-fluid">
         <div class="row">
-            {% if user.is_authenticated %}
-            <div class="col-md-2 sidebar py-3">
-                <nav class="nav flex-column">
-                    <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}"
-                       href="{% url 'pipeline:dashboard' %}">
-                        <i class="bi bi-house-door"></i> 대시보드
-                    </a>
-                    <a class="nav-link {% if 'settings' in request.path %}active{% endif %}"
-                       href="{% url 'accounts:settings' %}">
-                        <i class="bi bi-gear"></i> 설정
-                    </a>
-                    <hr>
-                    <h6 class="px-3 text-muted">파이프라인 단계</h6>
-                    <a class="nav-link" href="#" data-bs-toggle="collapse" data-bs-target="#stepsList">
-                        <i class="bi bi-list-task"></i> 단계 목록
-                    </a>
-                    <div class="collapse show" id="stepsList">
-                        <small class="d-block px-3 py-1 text-muted">1. Script Writer</small>
-                        <small class="d-block px-3 py-1 text-muted">2. Scene Planner</small>
-                        <small class="d-block px-3 py-1 text-muted">3. Image Prompter</small>
-                        <small class="d-block px-3 py-1 text-muted">4. Scene Generator</small>
-                        <small class="d-block px-3 py-1 text-muted">5. Video Generator</small>
-                        <small class="d-block px-3 py-1 text-muted">6. Video Composer</small>
-                        <small class="d-block px-3 py-1 text-muted">7. Thumbnail</small>
-                    </div>
-                </nav>
-            </div>
-            <main class="col-md-10 main-content">
-            {% else %}
             <main class="col-12 main-content">
-            {% endif %}
                 {% if messages %}
                 <div class="mb-3">
                     {% for message in messages %}

@@ -32,49 +32,15 @@ def project_create(request):
 
         project = Project.objects.create(user=request.user, name=name)
         messages.success(request, f'프로젝트 "{name}"가 생성되었습니다.')
-        return redirect('pipeline:project_detail', pk=project.pk)
+        return redirect('pipeline:project_data', pk=project.pk)
 
     return render(request, 'pipeline/project_create.html')
 
 
 @login_required
 def project_detail(request, pk):
-    """프로젝트 상세 페이지 - 타임라인 스타일"""
-    project = get_object_or_404(
-        Project.objects.select_related('topic', 'research', 'draft'),
-        pk=pk,
-        user=request.user
-    )
-    steps = PipelineStep.objects.all()
-
-    # 각 단계별 최근 실행 상태 가져오기
-    step_statuses = {}
-    for step in steps:
-        execution = project.step_executions.filter(step=step).order_by('-created_at').first()
-        step_statuses[step.name] = execution
-
-    # 각 단계별 데이터 존재 여부
-    step_data = {
-        'topic_finder': hasattr(project, 'topic') and project.topic is not None,
-        'researcher': hasattr(project, 'research') and project.research is not None,
-        'script_writer': hasattr(project, 'draft') and project.draft is not None,
-        'scene_planner': project.scenes.exists(),
-        'image_prompter': project.scenes.exclude(image_prompt='').exists(),
-        'scene_generator': project.scenes.exclude(image='').exists(),
-        'video_generator': project.scenes.exclude(video='').exists(),
-        'video_composer': bool(project.final_video),
-        'thumbnail_generator': bool(project.thumbnail),
-    }
-
-    context = {
-        'project': project,
-        'steps': steps,
-        'step_statuses': step_statuses,
-        'step_data': step_data,
-        'scenes': project.scenes.all()[:5],  # 미리보기용
-        'scene_count': project.scenes.count(),
-    }
-    return render(request, 'pipeline/project_detail.html', context)
+    """프로젝트 상세 페이지 → project_data로 리다이렉트"""
+    return redirect('pipeline:project_data', pk=pk)
 
 
 @login_required
@@ -111,7 +77,7 @@ def step_execute(request, pk, step_name):
                     messages.success(request, '주제가 저장되었습니다.')
                 else:
                     messages.error(request, f'저장 실패: {execution.error_message[:100]}')
-                return redirect('pipeline:project_detail', pk=project.pk)
+                return redirect('pipeline:project_data', pk=project.pk)
 
             # 나머지는 비동기 실행 (시간이 걸림) - 진행률 페이지로 이동
             thread = threading.Thread(target=service.run)
@@ -121,10 +87,10 @@ def step_execute(request, pk, step_name):
         else:
             execution.fail(f'서비스 클래스를 찾을 수 없습니다: {step.name}')
             messages.error(request, f'서비스를 찾을 수 없습니다: {step.name}')
-            return redirect('pipeline:project_detail', pk=project.pk)
+            return redirect('pipeline:project_data', pk=project.pk)
 
     # GET 요청은 프로젝트 상세로 리다이렉트
-    return redirect('pipeline:project_detail', pk=pk)
+    return redirect('pipeline:project_data', pk=pk)
 
 
 @login_required
@@ -152,7 +118,29 @@ def step_progress_api(request, pk, execution_id):
         'progress_message': execution.progress_message,
         'error_message': execution.error_message if execution.status == 'failed' else '',
         'logs': execution.logs or [],
+        # 토큰 사용량
+        'input_tokens': execution.input_tokens,
+        'output_tokens': execution.output_tokens,
+        'total_tokens': execution.total_tokens,
+        'estimated_cost': float(execution.estimated_cost),
+        'model_type': execution.model_type,
     })
+
+
+@login_required
+@require_POST
+def step_cancel(request, pk, execution_id):
+    """실행 취소"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    execution = get_object_or_404(StepExecution, pk=execution_id, project=project)
+
+    if execution.status == 'running':
+        execution.status = 'cancelled'
+        execution.error_message = '사용자가 취소함'
+        execution.save()
+        return JsonResponse({'success': True, 'message': '취소되었습니다.'})
+
+    return JsonResponse({'success': False, 'message': '실행 중인 작업이 아닙니다.'})
 
 
 @login_required
@@ -164,14 +152,50 @@ def project_data(request, pk):
         user=request.user
     )
 
+    # 각 단계별 최근 실행 가져오기
+    steps = PipelineStep.objects.all()
+    step_executions = {}
+    for step in steps:
+        execution = project.step_executions.filter(step=step).order_by('-created_at').first()
+        step_executions[step.name] = execution
+
     context = {
         'project': project,
         'topic': getattr(project, 'topic', None),
         'research': getattr(project, 'research', None),
         'draft': getattr(project, 'draft', None),
         'scenes': project.scenes.all(),
+        'steps': steps,
+        'step_executions': step_executions,
     }
     return render(request, 'pipeline/project_data.html', context)
+
+
+@login_required
+@require_POST
+def draft_update(request, pk):
+    """대본 수정 API"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+
+    title = request.POST.get('title', '').strip()
+    content = request.POST.get('content', '').strip()
+
+    if not content:
+        return JsonResponse({'success': False, 'message': '대본 내용을 입력해주세요.'})
+
+    draft, created = Draft.objects.update_or_create(
+        project=project,
+        defaults={
+            'title': title or '제목 없음',
+            'content': content,
+        }
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': '저장되었습니다.',
+        'char_count': draft.char_count,
+    })
 
 
 @login_required

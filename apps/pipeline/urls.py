@@ -12,6 +12,8 @@ urlpatterns = [
     path('project/<int:pk>/step/<str:step_name>/', views.step_execute, name='step_execute'),
     path('project/<int:pk>/progress/<int:execution_id>/', views.step_progress, name='step_progress'),
     path('project/<int:pk>/progress/<int:execution_id>/api/', views.step_progress_api, name='step_progress_api'),
+    path('project/<int:pk>/progress/<int:execution_id>/cancel/', views.step_cancel, name='step_cancel'),
+    path('project/<int:pk>/draft/update/', views.draft_update, name='draft_update'),
     path('project/<int:pk>/media/<str:media_type>/', views.download_media, name='download_media'),
     path('project/<int:pk>/media/<str:media_type>/<int:scene_id>/', views.download_media, name='download_media_scene'),
 ]

@@ -44,7 +44,7 @@
     <nav aria-label="breadcrumb">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
-            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_data' project.pk %}">{{ project.name }}</a></li>
             <li class="breadcrumb-item active">{{ execution.step.display_name }}</li>
         </ol>
     </nav>
@@ -62,6 +62,27 @@
                         <i class="bi bi-cpu"></i>
                         {% if execution.model_type == 'pro' %}Gemini 3 Pro{% else %}Gemini 3 Flash{% endif %}
                     </span>
+                </div>
+
+                <!-- 토큰 사용량 -->
+                <div class="mb-3 p-3 bg-light rounded" id="token-info">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span>입력 토큰</span>
+                        <span id="input-tokens">{{ execution.input_tokens|default:0 }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span>출력 토큰</span>
+                        <span id="output-tokens">{{ execution.output_tokens|default:0 }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between small fw-bold">
+                        <span>총 토큰</span>
+                        <span id="total-tokens">{{ execution.total_tokens|default:0 }}</span>
+                    </div>
+                    <hr class="my-2">
+                    <div class="d-flex justify-content-between">
+                        <span class="fw-bold">예상 비용</span>
+                        <span id="estimated-cost" class="fw-bold text-primary">$<span id="cost-value">{{ execution.estimated_cost|default:0 }}</span></span>
+                    </div>
                 </div>
 
                 <!-- 상태 표시 -->
@@ -101,9 +122,12 @@
 
                 <!-- 버튼 -->
                 <div class="mt-4">
-                    <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-secondary">
+                    <a href="{% url 'pipeline:project_data' project.pk %}" class="btn btn-secondary">
                         <i class="bi bi-arrow-left"></i> 돌아가기
                     </a>
+                    <button id="cancel-btn" class="btn btn-danger ms-2" onclick="cancelExecution()">
+                        <i class="bi bi-x-circle"></i> 중지
+                    </button>
                 </div>
             </div>
         </div>
@@ -164,7 +188,7 @@ class ProgressPoller {
                 this.stop();
                 if (data.status === 'completed') {
                     setTimeout(() => {
-                        window.location.href = `/pipeline/project/${this.projectPk}/`;
+                        window.location.href = `/pipeline/project/${this.projectPk}/data/`;
                     }, 2000);
                 }
             } else {
@@ -212,14 +236,26 @@ class ProgressPoller {
             document.getElementById('error-message').textContent = data.error_message;
         }
 
+        // 토큰 사용량 업데이트
+        document.getElementById('input-tokens').textContent = this.formatNumber(data.input_tokens || 0);
+        document.getElementById('output-tokens').textContent = this.formatNumber(data.output_tokens || 0);
+        document.getElementById('total-tokens').textContent = this.formatNumber(data.total_tokens || 0);
+        document.getElementById('cost-value').textContent = (data.estimated_cost || 0).toFixed(6);
+
         // 완료 시 프로그레스 바 색상 변경
         if (data.status === 'completed') {
             progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
             progressBar.classList.add('bg-success');
-        } else if (data.status === 'failed') {
+            document.getElementById('cancel-btn').style.display = 'none';
+        } else if (data.status === 'failed' || data.status === 'cancelled') {
             progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
             progressBar.classList.add('bg-danger');
+            document.getElementById('cancel-btn').style.display = 'none';
         }
+    }
+
+    formatNumber(num) {
+        return num.toLocaleString('ko-KR');
     }
 
     updateLogs(logs) {
@@ -275,5 +311,38 @@ document.addEventListener('DOMContentLoaded', function() {
     const poller = new ProgressPoller({{ execution.pk }}, {{ project.pk }});
     poller.start();
 });
+
+// 실행 취소
+async function cancelExecution() {
+    if (!confirm('정말 중지하시겠습니까?')) return;
+
+    const btn = document.getElementById('cancel-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass"></i> 중지 중...';
+
+    try {
+        const response = await fetch(`/pipeline/project/{{ project.pk }}/progress/{{ execution.pk }}/cancel/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json'
+            }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('중지되었습니다.');
+            window.location.href = `/pipeline/project/{{ project.pk }}/data/`;
+        } else {
+            alert(data.message || '중지 실패');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-x-circle"></i> 중지';
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-x-circle"></i> 중지';
+    }
+}
 </script>
 {% endblock %}

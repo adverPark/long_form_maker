@@ -1,313 +1,598 @@
 {% extends 'base.html' %}
+{% load pipeline_tags %}
 
-{% block title %}{{ project.name }} 데이터 - 롱폼 영상 제작{% endblock %}
+{% block title %}{{ project.name }} - 롱폼 영상 제작{% endblock %}
+
+{% block extra_css %}
+<style>
+.step-section {
+    border-left: 4px solid #dee2e6;
+    margin-bottom: 1.5rem;
+    background: #fff;
+}
+.step-section.has-data {
+    border-left-color: #198754;
+}
+.step-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #f8f9fa;
+    cursor: pointer;
+}
+.step-header:hover {
+    background: #e9ecef;
+}
+.step-body {
+    padding: 1rem;
+}
+.char-counter {
+    font-weight: bold;
+}
+.char-counter.good { color: #198754; }
+.char-counter.warning { color: #ffc107; }
+.char-counter.danger { color: #dc3545; }
+
+/* 씬 카드 스타일 */
+.scene-list {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+.scene-card {
+    display: grid;
+    grid-template-columns: 50px 1fr 1fr 120px 80px;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #eee;
+    align-items: start;
+}
+.scene-card:hover {
+    background: #f8f9fa;
+}
+.scene-number {
+    font-size: 1.1em;
+    color: #666;
+}
+.scene-narration {
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+.narration-text {
+    max-height: 80px;
+    overflow: hidden;
+}
+.scene-prompt {
+    font-size: 0.85em;
+    color: #555;
+    line-height: 1.4;
+}
+.prompt-text {
+    max-height: 80px;
+    overflow: hidden;
+}
+.prompt-empty {
+    font-style: italic;
+}
+.scene-image {
+    width: 120px;
+    height: 68px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.scene-thumbnail {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+}
+.image-placeholder {
+    font-size: 1.5em;
+}
+.scene-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.scene-actions .btn {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.75rem;
+}
+
+/* 이미지 미리보기 모달 */
+#imagePreviewModal .modal-body img {
+    max-width: 100%;
+    max-height: 80vh;
+}
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <nav aria-label="breadcrumb">
-            <ol class="breadcrumb mb-1">
-                <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
-                <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
-                <li class="breadcrumb-item active">데이터</li>
-            </ol>
-        </nav>
-        <h2>{{ project.name }} - 데이터</h2>
+        <h2>{{ project.name }}</h2>
+        <small class="text-muted">생성: {{ project.created_at|date:"Y-m-d H:i" }}</small>
     </div>
-    <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-outline-secondary">
-        <i class="bi bi-arrow-left"></i> 돌아가기
-    </a>
+    <div>
+        <a href="{% url 'pipeline:dashboard' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> 목록
+        </a>
+        <form method="post" action="{% url 'pipeline:project_delete' project.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('정말 삭제하시겠습니까?')">
+                <i class="bi bi-trash"></i>
+            </button>
+        </form>
+    </div>
 </div>
 
-<div class="row">
-    <div class="col-md-6">
-        <!-- 주제 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 1. 주제</h5>
-            </div>
-            <div class="card-body">
-                {% if topic %}
-                <table class="table table-sm">
-                    <tr><th width="100">제목</th><td>{{ topic.title }}</td></tr>
-                    {% if topic.url %}<tr><th>URL</th><td><a href="{{ topic.url }}" target="_blank">{{ topic.url|truncatechars:50 }}</a></td></tr>{% endif %}
-                    {% if topic.channel %}<tr><th>채널</th><td>{{ topic.channel }}</td></tr>{% endif %}
-                    {% if topic.view_count %}<tr><th>조회수</th><td>{{ topic.view_count|floatformat:0 }}</td></tr>{% endif %}
-                    {% if topic.viral_ratio %}<tr><th>바이럴</th><td>{{ topic.viral_ratio|floatformat:1 }}x</td></tr>{% endif %}
-                    {% if topic.reason %}<tr><th>메모</th><td>{{ topic.reason }}</td></tr>{% endif %}
-                </table>
-                {% else %}
-                <p class="text-muted">아직 주제가 입력되지 않았습니다.</p>
-                {% endif %}
-            </div>
+<!-- 1. 주제 -->
+{% with exec=step_executions|dict_get:'topic_finder' %}
+<div class="step-section {% if topic %}has-data{% endif %}" id="topic">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#topic-body">
+        <div>
+            <strong>1. 주제</strong>
+            {% if topic %}
+            <span class="badge bg-success ms-2">완료</span>
+            <span class="ms-2 text-muted">{{ topic.title|truncatechars:50 }}</span>
+            {% endif %}
         </div>
-
-        <!-- 대본 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-file-text"></i> 3. 대본</h5>
-            </div>
-            <div class="card-body">
-                {% if draft %}
-                <h6>{{ draft.title }}</h6>
-                <p class="text-muted">글자수: {{ draft.char_count }}자</p>
-                <pre class="bg-light p-3" style="max-height: 400px; overflow-y: auto; white-space: pre-wrap;">{{ draft.content }}</pre>
-                {% else %}
-                <p class="text-muted">아직 대본이 작성되지 않았습니다.</p>
-                {% endif %}
-            </div>
+        <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-inline" onclick="event.stopPropagation();">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-play-fill"></i> {% if topic %}수정{% else %}입력{% endif %}
+            </button>
+        </form>
+    </div>
+    <div class="collapse {% if topic %}show{% endif %}" id="topic-body">
+        <div class="step-body">
+            {% if topic %}
+            <table class="table table-sm mb-0">
+                <tr><th width="80">제목</th><td>{{ topic.title }}</td></tr>
+                {% if topic.url %}<tr><th>URL</th><td><a href="{{ topic.url }}" target="_blank">{{ topic.url|truncatechars:60 }}</a></td></tr>{% endif %}
+                {% if topic.reason %}<tr><th>메모</th><td>{{ topic.reason }}</td></tr>{% endif %}
+            </table>
+            {% else %}
+            <p class="text-muted mb-0">주제를 입력하세요.</p>
+            {% endif %}
         </div>
     </div>
+</div>
+{% endwith %}
 
-    <div class="col-md-6">
-        <!-- 리서치 -->
-        <div class="card mb-4" id="research">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-search"></i> 2. 리서치</h5>
+<!-- 2. 리서치 -->
+{% with exec=step_executions|dict_get:'researcher' %}
+<div class="step-section {% if research %}has-data{% endif %}" id="research">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#research-body">
+        <div>
+            <strong>2. 리서치</strong>
+            {% if research %}
+            <span class="badge bg-success ms-2">완료</span>
+            <span class="ms-2 text-muted">
+                인용구 {{ research.quotes|length }}개 | 숫자 {{ research.numbers|length }}개
+            </span>
+            {% endif %}
+            {% if exec.total_tokens %}
+            <small class="ms-2 text-primary">{{ exec.total_tokens }} 토큰 / ${{ exec.estimated_cost }}</small>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'researcher' %}" class="d-inline">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="flash">Flash</option>
+                    <option value="pro">Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-search"></i> {% if research %}재실행{% else %}실행{% endif %}
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse {% if research %}show{% endif %}" id="research-body">
+        <div class="step-body">
+            {% if research %}
+            {% if research.best_title.title %}
+            <div class="alert alert-success py-2 mb-3">
+                <strong>선정 제목:</strong> {{ research.best_title.title }}
             </div>
-            <div class="card-body">
-                {% if research %}
-                <h5 class="mb-3">{{ research.topic }}</h5>
+            {% endif %}
 
-                {% if research.best_title %}
-                <div class="alert alert-success py-2">
-                    <strong>선정 제목:</strong> {{ research.best_title.title }}<br>
-                    <small class="text-muted">패턴: {{ research.best_title.pattern }} | 훅: {{ research.best_title.hook|truncatechars:50 }}</small>
+            <div class="row">
+                <div class="col-md-6">
+                    <!-- 인용구 -->
+                    {% if research.quotes %}
+                    <details class="mb-3" open>
+                        <summary><strong>인용구 ({{ research.quotes|length }}개)</strong></summary>
+                        <ul class="mt-2 small">
+                            {% for q in research.quotes %}
+                            <li class="mb-2">"{{ q.quote }}" <br><small class="text-muted">- {{ q.source }}</small></li>
+                            {% endfor %}
+                        </ul>
+                    </details>
+                    {% endif %}
+
+                    <!-- 숫자/통계 -->
+                    {% if research.numbers %}
+                    <details class="mb-3" open>
+                        <summary><strong>숫자/통계 ({{ research.numbers|length }}개)</strong></summary>
+                        <ul class="mt-2 small">
+                            {% for n in research.numbers %}
+                            <li class="mb-1"><strong>{{ n.number }}</strong> - {{ n.context }}</li>
+                            {% endfor %}
+                        </ul>
+                    </details>
+                    {% endif %}
+                </div>
+                <div class="col-md-6">
+                    <!-- 인물 사례 -->
+                    {% if research.person_stories %}
+                    <details class="mb-3">
+                        <summary><strong>인물 사례 ({{ research.person_stories|length }}개)</strong></summary>
+                        <div class="mt-2 small">
+                            {% for p in research.person_stories %}
+                            <div class="border-start border-2 border-primary ps-2 mb-2">
+                                <strong>{{ p.name }}</strong><br>
+                                {{ p.past|default:'' }} → {{ p.present|default:'' }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+
+                    <!-- 역설 -->
+                    {% if research.paradox.common_belief %}
+                    <details class="mb-3">
+                        <summary><strong>역설/반전</strong></summary>
+                        <div class="mt-2 small bg-light p-2 rounded">
+                            <strong>통념:</strong> {{ research.paradox.common_belief }}<br>
+                            <strong>현실:</strong> {{ research.paradox.reality }}
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 기사별 요약 -->
+            {% if research.article_summaries %}
+            <details class="mb-3">
+                <summary><strong>검색 결과 상세 ({{ research.article_summaries|length }}개)</strong></summary>
+                <div class="mt-2">
+                    {% for article in research.article_summaries %}
+                    <div class="card mb-2">
+                        <div class="card-header py-1">
+                            <small class="text-primary"><i class="bi bi-search"></i> {{ article.query }}</small>
+                        </div>
+                        <div class="card-body py-2">
+                            <div style="font-size: 0.8em; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ article.summary }}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% else %}
+            <p class="text-muted mb-0">리서치를 실행하세요.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 3. 대본 -->
+{% with exec=step_executions|dict_get:'script_writer' %}
+<div class="step-section {% if draft %}has-data{% endif %}" id="draft">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#draft-body">
+        <div>
+            <strong>3. 대본</strong>
+            {% if draft %}
+            <span class="badge bg-{% if draft.char_count >= 7500 and draft.char_count <= 8500 %}success{% elif draft.char_count >= 7000 %}warning{% else %}danger{% endif %} ms-2">
+                {{ draft.char_count }}자
+            </span>
+            <span class="ms-2 text-muted">{{ draft.title|truncatechars:40 }}</span>
+            {% endif %}
+            {% if exec.total_tokens %}
+            <small class="ms-2 text-primary">{{ exec.total_tokens }} 토큰 / ${{ exec.estimated_cost }}</small>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'script_writer' %}" class="d-inline">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="flash">Flash</option>
+                    <option value="pro" selected>Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-pencil"></i> {% if draft %}재생성{% else %}생성{% endif %}
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse {% if draft %}show{% endif %}" id="draft-body">
+        <div class="step-body">
+            <div class="mb-2 d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="char-counter {% if draft.char_count >= 7500 and draft.char_count <= 8500 %}good{% elif draft.char_count >= 7000 %}warning{% else %}danger{% endif %}" id="draft-char-count">
+                        {{ draft.char_count|default:0 }}자
+                    </span>
+                    <small class="text-muted">/ 목표 7,500~8,500자</small>
+                </div>
+                <button class="btn btn-sm btn-success" id="save-draft-btn" onclick="saveDraft()" disabled>
+                    <i class="bi bi-check-lg"></i> 저장
+                </button>
+            </div>
+            <input type="text" class="form-control form-control-sm mb-2" id="draft-title"
+                   value="{{ draft.title|default:'' }}" placeholder="제목" onchange="enableSave()">
+            <textarea class="form-control" id="draft-content" rows="20"
+                      style="font-family: monospace; font-size: 0.9em; line-height: 1.8;"
+                      placeholder="대본 내용..." oninput="updateCharCount()">{{ draft.content|default:'' }}</textarea>
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 4. 씬 분할 + 씬 목록 -->
+{% with exec_planner=step_executions|dict_get:'scene_planner' exec_prompter=step_executions|dict_get:'image_prompter' exec_generator=step_executions|dict_get:'scene_generator' %}
+<div class="step-section {% if scenes.count > 0 %}has-data{% endif %}" id="scenes">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#scenes-body">
+        <div>
+            <strong>4. 씬 관리</strong>
+            {% if scenes.count > 0 %}
+            <span class="badge bg-success ms-2">{{ scenes.count }}개 씬</span>
+            {% with images_count=scenes|length prompt_count=0 %}
+            {% for s in scenes %}{% if s.image %}{% endif %}{% endfor %}
+            {% endwith %}
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <!-- 씬 분할 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_planner' %}" class="d-inline">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="flash">Flash</option>
+                    <option value="pro">Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-grid-3x3"></i> 씬분할
+                </button>
+            </form>
+            <!-- 프롬프트 생성 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="d-inline ms-1">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <i class="bi bi-chat-text"></i> 프롬프트
+                </button>
+            </form>
+            <!-- 전체 이미지 생성 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-1">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <i class="bi bi-images"></i> 전체생성
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse {% if scenes.count > 0 %}show{% endif %}" id="scenes-body">
+        <div class="step-body p-0">
+            {% if scenes.count > 0 %}
+            <!-- 씬 카드 목록 -->
+            <div class="scene-list">
+                {% for scene in scenes %}
+                <div class="scene-card" id="scene-{{ scene.scene_number }}">
+                    <div class="scene-number">
+                        <strong>{{ scene.scene_number }}.</strong>
+                        {% if scene.has_character %}<i class="bi bi-person-fill text-primary" title="캐릭터"></i>{% endif %}
+                    </div>
+                    <div class="scene-narration">
+                        <div class="narration-text">{{ scene.narration }}</div>
+                    </div>
+                    <div class="scene-prompt">
+                        {% if scene.image_prompt %}
+                        <div class="prompt-text">{{ scene.image_prompt }}</div>
+                        {% else %}
+                        <div class="prompt-empty text-muted">(프롬프트 없음)</div>
+                        {% endif %}
+                    </div>
+                    <div class="scene-image">
+                        {% if scene.image %}
+                        <img src="{{ scene.image.url }}" alt="씬 {{ scene.scene_number }}" class="scene-thumbnail" onclick="previewImage('{{ scene.image.url }}')">
+                        {% else %}
+                        <div class="image-placeholder">
+                            <i class="bi bi-image text-muted"></i>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="scene-actions">
+                        <button class="btn btn-sm btn-outline-primary" onclick="generateSceneImage({{ scene.scene_number }})" title="이미지 생성">
+                            <i class="bi bi-image"></i>
+                        </button>
+                        {% if scene.image %}
+                        <button class="btn btn-sm btn-outline-secondary" onclick="previewImage('{{ scene.image.url }}')" title="크게 보기">
+                            <i class="bi bi-zoom-in"></i>
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="p-4 text-center text-muted">
+                <i class="bi bi-grid-3x3-gap display-4"></i>
+                <p class="mt-2">대본을 기반으로 씬을 분할하세요.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 5. 영상 제작 -->
+{% with exec_video=step_executions|dict_get:'video_generator' exec_compose=step_executions|dict_get:'video_composer' exec_thumb=step_executions|dict_get:'thumbnail_generator' %}
+<div class="step-section" id="video">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#video-body">
+        <div>
+            <strong>5. 영상 제작</strong>
+            {% if project.final_video %}
+            <span class="badge bg-success ms-2">완료</span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <!-- 앞 4씬 동영상 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_generator' %}" class="d-inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-info">
+                    <i class="bi bi-film"></i> 인트로영상
+                </button>
+            </form>
+            <!-- 최종 편집 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_composer' %}" class="d-inline ms-1">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-camera-video"></i> 최종편집
+                </button>
+            </form>
+            <!-- 썸네일 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'thumbnail_generator' %}" class="d-inline ms-1">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-warning">
+                    <i class="bi bi-card-image"></i> 썸네일
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse" id="video-body">
+        <div class="step-body">
+            <div class="row">
+                {% if project.final_video %}
+                <div class="col-md-8">
+                    <h6>최종 영상</h6>
+                    <video controls class="w-100" style="max-height: 400px;">
+                        <source src="{{ project.final_video.url }}" type="video/mp4">
+                    </video>
                 </div>
                 {% endif %}
-
-                {% if research.summary %}
-                <p><strong>요약:</strong> {{ research.summary }}</p>
+                {% if project.thumbnail %}
+                <div class="col-md-4">
+                    <h6>썸네일</h6>
+                    <img src="{{ project.thumbnail.url }}" class="img-fluid">
+                </div>
                 {% endif %}
-
-                <!-- 인용구 -->
-                {% if research.quotes %}
-                <details class="mb-3">
-                    <summary><strong>인용구 ({{ research.quotes|length }}개)</strong></summary>
-                    <ul class="mt-2">
-                        {% for q in research.quotes %}
-                        <li>
-                            "{{ q.quote }}"
-                            <br><small class="text-muted">- {{ q.source }} ({{ q.emotion }}) → {{ q.usable_for }}</small>
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </details>
-                {% endif %}
-
-                <!-- 숫자/통계 -->
-                {% if research.numbers %}
-                <details class="mb-3">
-                    <summary><strong>숫자/통계 ({{ research.numbers|length }}개)</strong></summary>
-                    <ul class="mt-2">
-                        {% for n in research.numbers %}
-                        <li>
-                            <strong>{{ n.number }}</strong> - {{ n.context }}
-                            <br><small class="text-muted">임팩트: {{ n.impact }}</small>
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </details>
-                {% endif %}
-
-                <!-- 인물 사례 -->
-                {% if research.person_stories %}
-                <details class="mb-3">
-                    <summary><strong>인물 사례 ({{ research.person_stories|length }}개)</strong></summary>
-                    <div class="mt-2">
-                        {% for p in research.person_stories %}
-                        <div class="border-start border-3 border-primary ps-3 mb-2">
-                            <strong>{{ p.name }}</strong> ({{ p.age }}, {{ p.career }})<br>
-                            <small>과거: {{ p.past }}</small><br>
-                            <small>현재: {{ p.present }}</small><br>
-                            <small class="text-primary">"{{ p.quote }}"</small>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- 시간 변화 -->
-                {% if research.time_change %}
-                <details class="mb-3">
-                    <summary><strong>시간 변화 스토리</strong></summary>
-                    <div class="mt-2">
-                        {% if research.time_change.past %}
-                        <div class="d-flex align-items-center mb-2">
-                            <span class="badge bg-secondary me-2">과거</span>
-                            <span>{{ research.time_change.past.year }} - {{ research.time_change.past.situation }}</span>
-                        </div>
-                        {% endif %}
-                        {% if research.time_change.turning_point %}
-                        <div class="d-flex align-items-center mb-2">
-                            <span class="badge bg-warning me-2">전환점</span>
-                            <span>{{ research.time_change.turning_point.year }} - {{ research.time_change.turning_point.event }}</span>
-                        </div>
-                        {% endif %}
-                        {% if research.time_change.present %}
-                        <div class="d-flex align-items-center">
-                            <span class="badge bg-danger me-2">현재</span>
-                            <span>{{ research.time_change.present.year }} - {{ research.time_change.present.situation }}</span>
-                        </div>
-                        {% endif %}
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- 역설 -->
-                {% if research.paradox %}
-                <details class="mb-3">
-                    <summary><strong>역설/반전 요소</strong></summary>
-                    <div class="mt-2 bg-light p-2 rounded">
-                        <small class="text-muted">상식:</small> {{ research.paradox.common_belief }}<br>
-                        <small class="text-muted">현실:</small> {{ research.paradox.reality }}<br>
-                        <small class="text-muted">통찰:</small> <strong>{{ research.paradox.insight }}</strong>
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- 시청자 연결 -->
-                {% if research.viewer_connection %}
-                <details class="mb-3">
-                    <summary><strong>시청자 연결</strong></summary>
-                    <div class="mt-2">
-                        <small class="text-muted">직접 영향:</small> {{ research.viewer_connection.direct_impact }}<br>
-                        <small class="text-muted">간접 영향:</small> {{ research.viewer_connection.indirect_impact }}<br>
-                        <small class="text-muted">자기 점검:</small> <strong>{{ research.viewer_connection.self_check }}</strong>
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- 서사 구조 -->
-                {% if research.narrative_structure %}
-                <details class="mb-3">
-                    <summary><strong>서사 구조</strong></summary>
-                    <div class="mt-2">
-                        {% if research.narrative_structure.intro %}
-                        <div class="mb-2">
-                            <span class="badge bg-info">인트로</span>
-                            <small>훅: {{ research.narrative_structure.intro.hook }}</small>
-                        </div>
-                        {% endif %}
-                        {% if research.narrative_structure.act1 %}
-                        <div class="mb-2">
-                            <span class="badge bg-primary">Act 1</span>
-                            <small>{{ research.narrative_structure.act1.title }}</small>
-                        </div>
-                        {% endif %}
-                        {% if research.narrative_structure.act2 %}
-                        <div class="mb-2">
-                            <span class="badge bg-primary">Act 2</span>
-                            <small>{{ research.narrative_structure.act2.title }}</small>
-                        </div>
-                        {% endif %}
-                        {% if research.narrative_structure.act3 %}
-                        <div class="mb-2">
-                            <span class="badge bg-primary">Act 3</span>
-                            <small>{{ research.narrative_structure.act3.title }}</small>
-                        </div>
-                        {% endif %}
-                        {% if research.narrative_structure.conclusion %}
-                        <div>
-                            <span class="badge bg-success">결론</span>
-                            <small>{{ research.narrative_structure.conclusion.summary }}</small>
-                        </div>
-                        {% endif %}
-                    </div>
-                </details>
-                {% endif %}
-
-                <!-- 제목 후보 -->
-                {% if research.title_candidates %}
-                <details class="mb-3">
-                    <summary><strong>제목 후보 ({{ research.title_candidates|length }}개)</strong></summary>
-                    <ol class="mt-2">
-                        {% for t in research.title_candidates %}
-                        <li>{{ t }}</li>
-                        {% endfor %}
-                    </ol>
-                </details>
-                {% endif %}
-
-                <!-- 출처 -->
-                {% if research.sources %}
-                <details class="mb-3">
-                    <summary><strong>출처 ({{ research.sources|length }}개)</strong></summary>
-                    <ul class="mt-2" style="font-size: 0.85em;">
-                        {% for s in research.sources %}
-                        <li>
-                            <a href="{{ s.url }}" target="_blank">{{ s.title|default:"링크" }}</a>
-                            {% if s.publisher %}<small class="text-muted">({{ s.publisher }})</small>{% endif %}
-                            {% if s.key_info %}<br><small class="text-muted">{{ s.key_info }}</small>{% endif %}
-                        </li>
-                        {% endfor %}
-                    </ul>
-                </details>
-                {% endif %}
-
-                <!-- 원본 자막 -->
-                {% if research.transcript %}
-                <details>
-                    <summary><strong>원본 자막</strong></summary>
-                    <pre class="bg-light p-2 mt-2" style="max-height: 200px; overflow-y: auto; font-size: 0.8em;">{{ research.transcript }}</pre>
-                </details>
-                {% endif %}
-
-                {% else %}
-                <p class="text-muted">아직 리서치가 완료되지 않았습니다.</p>
+                {% if not project.final_video and not project.thumbnail %}
+                <div class="col-12 text-muted">
+                    씬 이미지 생성 후 영상을 제작하세요.
+                </div>
                 {% endif %}
             </div>
         </div>
     </div>
 </div>
+{% endwith %}
 
-<!-- 씬 목록 -->
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-collection-play"></i> 4. 씬 목록 ({{ scenes.count }}개)</h5>
-    </div>
-    <div class="card-body">
-        {% if scenes %}
-        <div class="table-responsive">
-            <table class="table table-sm table-hover">
-                <thead>
-                    <tr>
-                        <th width="50">#</th>
-                        <th width="80">섹션</th>
-                        <th>나레이션</th>
-                        <th width="60">캐릭터</th>
-                        <th width="60">길이</th>
-                        <th width="80">이미지</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for scene in scenes %}
-                    <tr>
-                        <td>{{ scene.scene_number }}</td>
-                        <td><span class="badge bg-secondary">{{ scene.get_section_display }}</span></td>
-                        <td>
-                            {{ scene.narration|truncatechars:100 }}
-                            {% if scene.image_prompt %}
-                            <br><small class="text-muted">프롬프트: {{ scene.image_prompt|truncatechars:50 }}</small>
-                            {% endif %}
-                        </td>
-                        <td>{% if scene.has_character %}<i class="bi bi-person-fill text-success"></i>{% else %}-{% endif %}</td>
-                        <td>{{ scene.duration|floatformat:1 }}s</td>
-                        <td>
-                            {% if scene.image %}
-                            <img src="{{ scene.image.url }}" alt="씬 {{ scene.scene_number }}" style="max-height: 40px;">
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+<!-- 이미지 미리보기 모달 -->
+<div class="modal fade" id="imagePreviewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">이미지 미리보기</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="previewImg" src="" alt="미리보기">
+            </div>
         </div>
-        {% else %}
-        <p class="text-muted">아직 씬이 생성되지 않았습니다.</p>
-        {% endif %}
     </div>
 </div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function updateCharCount() {
+    const content = document.getElementById('draft-content');
+    if (!content) return;
+
+    const count = content.value.length;
+    const counter = document.getElementById('draft-char-count');
+    counter.textContent = count + '자';
+
+    counter.classList.remove('good', 'warning', 'danger');
+    if (count >= 7500 && count <= 8500) {
+        counter.classList.add('good');
+    } else if (count >= 7000) {
+        counter.classList.add('warning');
+    } else {
+        counter.classList.add('danger');
+    }
+
+    enableSave();
+}
+
+function enableSave() {
+    const btn = document.getElementById('save-draft-btn');
+    if (btn) btn.disabled = false;
+}
+
+async function saveDraft() {
+    const btn = document.getElementById('save-draft-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass"></i> 저장 중...';
+
+    const title = document.getElementById('draft-title').value;
+    const content = document.getElementById('draft-content').value;
+
+    try {
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('content', content);
+
+        const response = await fetch('{% url "pipeline:draft_update" project.pk %}', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            btn.innerHTML = '<i class="bi bi-check-lg"></i> 저장됨';
+            document.getElementById('draft-char-count').textContent = data.char_count + '자';
+            setTimeout(() => {
+                btn.innerHTML = '<i class="bi bi-check-lg"></i> 저장';
+            }, 2000);
+        } else {
+            alert(data.message || '저장 실패');
+            btn.innerHTML = '<i class="bi bi-check-lg"></i> 저장';
+            btn.disabled = false;
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+        btn.innerHTML = '<i class="bi bi-check-lg"></i> 저장';
+        btn.disabled = false;
+    }
+}
+
+// 이미지 미리보기
+function previewImage(url) {
+    document.getElementById('previewImg').src = url;
+    new bootstrap.Modal(document.getElementById('imagePreviewModal')).show();
+}
+
+// 씬 이미지 생성 (개별)
+async function generateSceneImage(sceneNumber) {
+    if (!confirm(`씬 ${sceneNumber}의 이미지를 생성하시겠습니까?`)) return;
+
+    // TODO: 개별 씬 이미지 생성 API 호출
+    alert('개별 씬 이미지 생성 기능은 준비 중입니다.');
+}
+
+// 초기 글자수 표시
+document.addEventListener('DOMContentLoaded', updateCharCount);
+</script>
 {% endblock %}

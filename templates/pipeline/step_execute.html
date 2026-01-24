@@ -7,7 +7,7 @@
     <nav aria-label="breadcrumb">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="{% url 'pipeline:dashboard' %}">대시보드</a></li>
-            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_detail' project.pk %}">{{ project.name }}</a></li>
+            <li class="breadcrumb-item"><a href="{% url 'pipeline:project_data' project.pk %}">{{ project.name }}</a></li>
             <li class="breadcrumb-item active">{{ step.display_name }}</li>
         </ol>
     </nav>
@@ -87,7 +87,7 @@
                         <button type="submit" class="btn btn-primary btn-lg">
                             <i class="bi bi-play-fill"></i> 실행
                         </button>
-                        <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-secondary">
+                        <a href="{% url 'pipeline:project_data' project.pk %}" class="btn btn-secondary">
                             <i class="bi bi-arrow-left"></i> 돌아가기
                         </a>
                     </div>

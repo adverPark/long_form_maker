@@ -5,101 +5,194 @@ from apps.pipeline.models import Scene
 
 
 class ScenePlannerService(BaseStepService):
-    """씬 분할 서비스 - 대본을 45-60개 씬으로 분할"""
+    """씬 분할 서비스
+
+    규칙:
+    - 대본 전체가 빠짐없이 씬으로 분할되어야 함 (누락 금지!)
+    - 초반 10개 씬: 10초 이내 (다이나믹하게)
+    - 이후 씬: 15-20초 이내
+    - 캐릭터 등장 30% 이상
+    - image_prompt = "[PLACEHOLDER]" (image-prompter가 채움)
+    - narration_tts: 숫자를 한글로 변환
+    """
 
     agent_name = 'scene_planner'
 
     def execute(self):
-        self.update_progress(10, '대본 로딩 중...')
+        self.update_progress(5, '대본 로딩 중...')
+        self.log('씬 분할 시작')
 
-        # 입력 확인 (Draft 모델 또는 수동 입력)
+        # 입력 확인
         manual_input = self.get_manual_input()
-
         title = ''
         content = ''
 
         if manual_input:
             content = manual_input
             title = '사용자 입력 대본'
-        elif hasattr(self.project, 'draft'):
+            self.log('수동 입력 대본 사용')
+        elif hasattr(self.project, 'draft') and self.project.draft:
             draft = self.project.draft
             title = draft.title
             content = draft.content
+            self.log(f'대본 로드: {title} ({len(content)}자)')
 
         if not content:
             raise ValueError('대본이 없습니다. 대본 작성을 먼저 완료하거나 직접 입력해주세요.')
 
-        self.update_progress(20, '씬 분할 중...')
+        original_char_count = len(content)
+        self.log(f'원본 대본 글자수: {original_char_count}자')
 
-        # 프롬프트 가져오기
-        prompt_template = self.get_prompt()
+        # 프롬프트 구성
+        self.update_progress(10, '프롬프트 준비 중...')
+        prompt = self._build_prompt(title, content)
 
-        if prompt_template:
-            prompt = f"{prompt_template}\n\n## 대본:\n제목: {title}\n\n{content}"
-        else:
-            prompt = f"""대본을 45-60개의 씬으로 분할해주세요.
+        # Gemini 호출
+        self.update_progress(20, 'AI 씬 분할 요청 중...')
+        self.log('Gemini API 호출 중...')
+        response = self.call_gemini(prompt)
+        self.log('Gemini 응답 수신')
 
-## 대본:
+        # 파싱
+        self.update_progress(50, '결과 파싱 중...')
+        scenes_data = self._parse_response(response)
+        self.log(f'파싱 결과: {len(scenes_data)}개 씬')
+
+        # 검증 1: 대본 누락 체크
+        narration_total = sum(len(s.get('narration', '')) for s in scenes_data)
+        diff = original_char_count - narration_total
+        self.log(f'글자수 검증: 원본 {original_char_count}자, 씬 합계 {narration_total}자, 차이 {diff}자')
+
+        if diff > 500:  # 500자 이상 누락 시 재시도
+            self.update_progress(60, f'대본 누락 감지 ({diff}자), 재분할 중...')
+            self.log(f'대본 누락! {diff}자 빠짐. 재시도...', 'error')
+            scenes_data = self._retry_with_full_content(title, content, scenes_data)
+            narration_total = sum(len(s.get('narration', '')) for s in scenes_data)
+            self.log(f'재분할 결과: {len(scenes_data)}개 씬, {narration_total}자')
+
+        # 검증 2: 캐릭터 등장 비율
+        char_count = sum(1 for s in scenes_data if s.get('character_appears', False))
+        char_ratio = char_count / len(scenes_data) if scenes_data else 0
+        self.log(f'캐릭터 등장: {char_count}/{len(scenes_data)} ({char_ratio:.0%})')
+
+        if char_ratio < 0.3:
+            self.log('캐릭터 등장 30% 미만, 자동 보정 중...')
+            scenes_data = self._adjust_character_appearance(scenes_data)
+
+        # 검증 3: 씬 길이 체크
+        self._validate_durations(scenes_data)
+
+        # DB 저장
+        self.update_progress(85, 'DB에 저장 중...')
+        self.log('기존 씬 삭제 중...')
+        self.project.scenes.all().delete()
+
+        self.log('새 씬 저장 중...')
+        for i, scene_data in enumerate(scenes_data):
+            Scene.objects.create(
+                project=self.project,
+                scene_number=scene_data.get('scene_id', i + 1),
+                section=self._normalize_section(scene_data.get('section', 'body_1')),
+                narration=scene_data.get('narration', ''),
+                narration_tts=scene_data.get('narration_tts', ''),
+                duration=scene_data.get('duration_seconds', 10),
+                has_character=scene_data.get('character_appears', False),
+                image_prompt='[PLACEHOLDER]',
+            )
+
+        # 최종 검증 로그
+        final_count = len(scenes_data)
+        final_chars = sum(len(s.get('narration', '')) for s in scenes_data)
+        final_char_ratio = sum(1 for s in scenes_data if s.get('character_appears', False)) / final_count
+
+        self.log(f'씬 분할 완료', 'result', {
+            'scene_count': final_count,
+            'total_chars': final_chars,
+            'original_chars': original_char_count,
+            'char_diff': original_char_count - final_chars,
+            'character_ratio': f'{final_char_ratio:.0%}'
+        })
+        self.update_progress(100, f'완료: {final_count}개 씬 ({final_chars}자)')
+
+    def _build_prompt(self, title: str, content: str) -> str:
+        """프롬프트 구성"""
+        # DB에서 프롬프트 가져오기
+        db_prompt = self.get_prompt()
+
+        base_prompt = db_prompt if db_prompt else self._get_default_prompt()
+
+        return f"""{base_prompt}
+
+---
+
+## 대본 (전체를 빠짐없이 씬으로 분할하세요!)
+
 제목: {title}
 
 {content}
 
-## 분할 원칙
-1. 각 씬은 10-20초 분량 (한글 40-80자)
-2. 자연스러운 문장 단위로 분할
-3. 캐릭터 등장 씬은 전체의 30% 이상
-4. 섹션: intro, body_1, body_2, body_3, action, outro
+---
 
-## 출력 형식 (JSON)
+⚠️ 중요: 위 대본의 모든 문장이 씬에 포함되어야 합니다!
+- 원본 글자수: {len(content)}자
+- 씬 narration 합계도 비슷해야 함 (차이 100자 이내)
+- 마지막 문장까지 빠짐없이!
+
+JSON 형식으로 출력하세요."""
+
+    def _get_default_prompt(self) -> str:
+        """기본 프롬프트"""
+        return """# 씬 분할 전문가
+
+대본을 씬으로 분할합니다.
+
+## 절대 규칙
+
+### 1. 대본 누락 금지 (가장 중요!)
+- 대본의 모든 문장이 씬에 포함되어야 함
+- 글자수 차이 100자 이내
+
+### 2. 씬 길이
+- 초반 10개 씬 (scene 1~10): 10초 이내 (다이나믹하게!)
+- 이후 씬 (scene 11~): 15-20초 이내
+
+### 3. 캐릭터 등장 30% 이상
+- character_appears: true인 씬이 전체의 30% 이상
+
+### 4. image_prompt = "[PLACEHOLDER]"
+- 이미지 프롬프트는 작성하지 마세요
+
+### 5. narration_tts
+- 숫자를 한글로 변환
+- 470% → 사백칠십퍼센트
+- 2024년 → 이천이십사년
+- 100억 → 백억
+
+## section 종류
+- intro: 오프닝 (처음 8-10개 씬)
+- body_1: 개념 설명
+- body_2: 본질 분석
+- body_3: 문제점 심화
+- action: 액션 플랜
+- outro: 마무리
+
+## 출력 형식
+
 ```json
-{{
+{
   "scenes": [
-    {{
+    {
       "scene_id": 1,
       "section": "intro",
+      "duration_seconds": 5,
       "narration": "자막에 표시될 내용",
-      "narration_tts": "TTS로 읽을 내용 (숫자는 한글로)",
-      "duration": 12,
-      "has_character": true
-    }}
+      "narration_tts": "숫자는 한글로 변환",
+      "image_prompt": "[PLACEHOLDER]",
+      "character_appears": true
+    }
   ]
-}}
-```
-
-숫자 변환 예시:
-- "470%" → "사백칠십퍼센트"
-- "2024년" → "이천이십사년"
-- "100억" → "백억" """
-
-        # Gemini 호출
-        self.update_progress(40, 'AI 씬 분할 중...')
-        response = self.call_gemini(prompt)
-
-        self.update_progress(70, '결과 파싱 중...')
-
-        scenes_data = self._parse_response(response)
-
-        if len(scenes_data) < 40:
-            self.update_progress(75, f'씬 수 부족 ({len(scenes_data)}개), 재분할 중...')
-            scenes_data = self._refine_scenes(scenes_data, content)
-
-        # 기존 씬 삭제 후 새로 저장
-        self.update_progress(85, 'DB에 저장 중...')
-        self.project.scenes.all().delete()
-
-        for scene_data in scenes_data:
-            Scene.objects.create(
-                project=self.project,
-                scene_number=scene_data.get('scene_id', 0),
-                section=scene_data.get('section', 'body_1'),
-                narration=scene_data.get('narration', ''),
-                narration_tts=scene_data.get('narration_tts', ''),
-                duration=scene_data.get('duration', 10),
-                has_character=scene_data.get('has_character', False),
-                image_prompt='',  # image_prompter가 나중에 채움
-            )
-
-        self.update_progress(100, f'완료: {len(scenes_data)}개 씬')
+}
+```"""
 
     def _parse_response(self, response: str) -> list:
         """응답 파싱"""
@@ -119,22 +212,114 @@ class ScenePlannerService(BaseStepService):
         except json.JSONDecodeError:
             pass
 
+        # { } 블록 찾기
+        json_match = re.search(r'\{[\s\S]*"scenes"[\s\S]*\}', response)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+                return data.get('scenes', [])
+            except json.JSONDecodeError:
+                pass
+
+        self.log('JSON 파싱 실패', 'error')
         return []
 
-    def _refine_scenes(self, scenes_data: list, original_content: str) -> list:
-        """씬 수가 부족할 때 재분할"""
-        refine_prompt = f"""현재 {len(scenes_data)}개의 씬이 있습니다.
-45-60개가 되도록 더 세밀하게 분할해주세요.
+    def _retry_with_full_content(self, title: str, content: str, partial_scenes: list) -> list:
+        """대본 누락 시 재시도"""
+        # 어디까지 분할됐는지 확인
+        last_narration = partial_scenes[-1].get('narration', '') if partial_scenes else ''
 
-원본 대본:
-{original_content[:4000]}...
+        retry_prompt = f"""이전 분할에서 대본 후반부가 누락되었습니다.
 
-동일한 JSON 형식으로 출력해주세요:
+## 누락된 부분 포함해서 다시 전체 분할해주세요!
+
+대본 전문:
+{content}
+
+마지막까지 빠짐없이 모든 문장을 씬으로 분할하세요.
+원본 글자수: {len(content)}자
+
+JSON 형식으로 출력:
 ```json
-{{
-  "scenes": [...]
-}}
+{{"scenes": [...]}}
 ```"""
 
-        response = self.call_gemini(refine_prompt)
-        return self._parse_response(response)
+        response = self.call_gemini(retry_prompt)
+        new_scenes = self._parse_response(response)
+
+        return new_scenes if new_scenes else partial_scenes
+
+    def _adjust_character_appearance(self, scenes_data: list) -> list:
+        """캐릭터 등장 비율 30% 이상으로 조정"""
+        total = len(scenes_data)
+        needed = int(total * 0.3)
+        current = sum(1 for s in scenes_data if s.get('character_appears', False))
+
+        if current >= needed:
+            return scenes_data
+
+        # 캐릭터 추가할 씬 선택 (질문, 강조, CTA 등)
+        keywords = ['?', '할까요', '하세요', '입니다', '있습니다', '거든요', '잖아요']
+
+        for scene in scenes_data:
+            if current >= needed:
+                break
+            if not scene.get('character_appears', False):
+                narration = scene.get('narration', '')
+                if any(kw in narration for kw in keywords):
+                    scene['character_appears'] = True
+                    current += 1
+
+        # 아직 부족하면 intro/outro에 추가
+        for scene in scenes_data:
+            if current >= needed:
+                break
+            if not scene.get('character_appears', False):
+                if scene.get('section') in ['intro', 'outro']:
+                    scene['character_appears'] = True
+                    current += 1
+
+        # 그래도 부족하면 간격 두고 추가
+        no_char_count = 0
+        for scene in scenes_data:
+            if current >= needed:
+                break
+            if scene.get('character_appears', False):
+                no_char_count = 0
+            else:
+                no_char_count += 1
+                if no_char_count >= 3:  # 3개 연속 미등장이면 추가
+                    scene['character_appears'] = True
+                    current += 1
+                    no_char_count = 0
+
+        return scenes_data
+
+    def _validate_durations(self, scenes_data: list):
+        """씬 길이 검증 (로그만, 수정은 안 함)"""
+        early_long = [s for s in scenes_data[:10] if s.get('duration_seconds', 0) > 10]
+        if early_long:
+            self.log(f'초반 10개 씬 중 {len(early_long)}개가 10초 초과', 'error')
+
+        later_long = [s for s in scenes_data[10:] if s.get('duration_seconds', 0) > 20]
+        if later_long:
+            self.log(f'11번째 이후 씬 중 {len(later_long)}개가 20초 초과', 'error')
+
+    def _normalize_section(self, section: str) -> str:
+        """section 값 정규화"""
+        valid_sections = ['intro', 'body_1', 'body_2', 'body_3', 'action', 'outro']
+        section = section.lower().strip()
+
+        # 매핑
+        mappings = {
+            'opening': 'intro',
+            'introduction': 'intro',
+            'body': 'body_1',
+            'conclusion': 'outro',
+            'ending': 'outro',
+            'cta': 'outro',
+        }
+
+        if section in valid_sections:
+            return section
+        return mappings.get(section, 'body_1')
