@@ -23,7 +23,7 @@ GEMINI_MODEL = 'gemini-3-pro-preview'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
 # Fish Speech TTS 설정
-FISH_SPEECH_URL = 'http://118.216.98.160:9881'
+FISH_SPEECH_URL = 'http://localhost:9881'
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-dev-key-change-in-production')

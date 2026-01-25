@@ -34,7 +34,9 @@ class User(AbstractUser):
         if not self.encryption_key:
             self.encryption_key = Fernet.generate_key()
             self.save(update_fields=['encryption_key'])
-        return Fernet(self.encryption_key)
+        # PostgreSQL BinaryField는 memoryview로 반환될 수 있음
+        key = bytes(self.encryption_key) if isinstance(self.encryption_key, memoryview) else self.encryption_key
+        return Fernet(key)
 
 
 class APIKey(models.Model):
@@ -79,7 +81,9 @@ class APIKey(models.Model):
     def get_key(self) -> str:
         """암호화된 API 키를 복호화하여 반환"""
         fernet = self.user.get_fernet()
-        return fernet.decrypt(self.encrypted_key).decode()
+        # PostgreSQL BinaryField는 memoryview로 반환될 수 있음
+        encrypted = bytes(self.encrypted_key) if isinstance(self.encrypted_key, memoryview) else self.encrypted_key
+        return fernet.decrypt(encrypted).decode()
 
     def get_masked_key(self) -> str:
         """마스킹된 API 키 반환 (앞 4자리만 표시)"""
