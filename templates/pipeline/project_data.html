@@ -41,11 +41,38 @@
 }
 .scene-card {
     display: grid;
-    grid-template-columns: 50px 1fr 1fr 120px 80px;
+    grid-template-columns: 50px 1fr 1fr 120px 120px 80px 100px;
     gap: 12px;
     padding: 12px 16px;
     border-bottom: 1px solid #eee;
     align-items: start;
+}
+.subtitle-status {
+    font-size: 0.75em;
+    text-align: center;
+}
+.subtitle-status.matched {
+    color: #198754;
+}
+.subtitle-status.mismatch {
+    color: #dc3545;
+    font-weight: bold;
+}
+.subtitle-status.none {
+    color: #6c757d;
+}
+.scene-audio {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.scene-audio audio {
+    height: 30px;
+    width: 100%;
+}
+.audio-loading {
+    color: #6c757d;
+    font-size: 0.8em;
 }
 .scene-card:hover {
     background: #f8f9fa;
@@ -103,6 +130,36 @@
     font-size: 0.75rem;
 }
 
+/* 인라인 편집 스타일 */
+.editable-text {
+    cursor: text;
+    padding: 4px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.editable-text:hover {
+    background: #f0f0f0;
+}
+.editable-text:focus {
+    background: #fff;
+    outline: 2px solid #0d6efd;
+    outline-offset: 2px;
+}
+.editable-text.saving {
+    background: #fff3cd;
+}
+.editable-text.saved {
+    background: #d1e7dd;
+}
+.editable-text.error {
+    background: #f8d7da;
+}
+.editable-text:empty:before {
+    content: attr(data-placeholder);
+    color: #999;
+    font-style: italic;
+}
+
 /* 이미지 미리보기 모달 */
 #imagePreviewModal .modal-body img {
     max-width: 100%;
@@ -118,6 +175,9 @@
         <small class="text-muted">생성: {{ project.created_at|date:"Y-m-d H:i" }}</small>
     </div>
     <div>
+        <a href="{% url 'pipeline:project_settings' project.pk %}" class="btn btn-outline-info btn-sm">
+            <i class="bi bi-gear"></i> 설정
+        </a>
         <a href="{% url 'pipeline:dashboard' %}" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-arrow-left"></i> 목록
         </a>
@@ -130,6 +190,23 @@
     </div>
 </div>
 
+<!-- 실행 중인 작업 배너 (여러 개 가능) -->
+{% if running_executions %}
+<div class="alert alert-warning mb-4">
+    <div class="d-flex flex-wrap gap-3">
+        {% for exec in running_executions %}
+        <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-hourglass-split"></i>
+            <strong>{{ exec.step.display_name }}</strong> ({{ exec.progress_percent }}%)
+            <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="btn btn-warning btn-sm py-0">
+                보기
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <!-- 1. 주제 -->
 {% with exec=step_executions|dict_get:'topic_finder' %}
 <div class="step-section {% if topic %}has-data{% endif %}" id="topic">
@@ -141,12 +218,23 @@
             <span class="ms-2 text-muted">{{ topic.title|truncatechars:50 }}</span>
             {% endif %}
         </div>
-        <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-inline" onclick="event.stopPropagation();">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-play-fill"></i> {% if topic %}수정{% else %}입력{% endif %}
-            </button>
-        </form>
+        <div class="d-inline" onclick="event.stopPropagation();">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-play-fill"></i> {% if topic %}수정{% else %}입력{% endif %}
+                </button>
+            </form>
+            {% if topic %}
+            <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}" class="d-inline ms-2">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-success"
+                        onclick="return confirm('주제를 기반으로 전체 영상을 자동 생성합니다.\n\n순서:\n1. 리서치\n2. 대본\n3. 씬 분할\n4. 이미지 프롬프트 + TTS\n5. 이미지 생성\n\n계속하시겠습니까?')">
+                    <i class="bi bi-lightning-fill"></i> 자동 생성
+                </button>
+            </form>
+            {% endif %}
+        </div>
     </div>
     <div class="collapse {% if topic %}show{% endif %}" id="topic-body">
         <div class="step-body">
@@ -156,6 +244,9 @@
                 {% if topic.url %}<tr><th>URL</th><td><a href="{{ topic.url }}" target="_blank">{{ topic.url|truncatechars:60 }}</a></td></tr>{% endif %}
                 {% if topic.reason %}<tr><th>메모</th><td>{{ topic.reason }}</td></tr>{% endif %}
             </table>
+            <p class="text-muted small mt-2 mb-0">
+                <i class="bi bi-info-circle"></i> "자동 생성" 버튼으로 리서치~이미지까지 한 번에 실행할 수 있습니다.
+            </p>
             {% else %}
             <p class="text-muted mb-0">주제를 입력하세요.</p>
             {% endif %}
@@ -170,7 +261,11 @@
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#research-body">
         <div>
             <strong>2. 리서치</strong>
-            {% if research %}
+            {% if exec.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 진행 중 ({{ exec.progress_percent }}%)
+            </a>
+            {% elif research %}
             <span class="badge bg-success ms-2">완료</span>
             <span class="ms-2 text-muted">
                 인용구 {{ research.quotes|length }}개 | 숫자 {{ research.numbers|length }}개
@@ -290,7 +385,11 @@
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#draft-body">
         <div>
             <strong>3. 대본</strong>
-            {% if draft %}
+            {% if exec.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 진행 중 ({{ exec.progress_percent }}%)
+            </a>
+            {% elif draft %}
             <span class="badge bg-{% if draft.char_count >= 7500 and draft.char_count <= 8500 %}success{% elif draft.char_count >= 7000 %}warning{% else %}danger{% endif %} ms-2">
                 {{ draft.char_count }}자
             </span>
@@ -337,16 +436,43 @@
 {% endwith %}
 
 <!-- 4. 씬 분할 + 씬 목록 -->
-{% with exec_planner=step_executions|dict_get:'scene_planner' exec_prompter=step_executions|dict_get:'image_prompter' exec_generator=step_executions|dict_get:'scene_generator' %}
+{% with exec_planner=step_executions|dict_get:'scene_planner' exec_prompter=step_executions|dict_get:'image_prompter' exec_generator=step_executions|dict_get:'scene_generator' exec_tts=step_executions|dict_get:'tts_generator' %}
 <div class="step-section {% if scenes.count > 0 %}has-data{% endif %}" id="scenes">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#scenes-body">
         <div>
             <strong>4. 씬 관리</strong>
             {% if scenes.count > 0 %}
             <span class="badge bg-success ms-2">{{ scenes.count }}개 씬</span>
-            {% with images_count=scenes|length prompt_count=0 %}
-            {% for s in scenes %}{% if s.image %}{% endif %}{% endfor %}
-            {% endwith %}
+            {% endif %}
+            <!-- 진행 중인 작업 표시 -->
+            {% if exec_planner.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_planner.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 씬분할 {{ exec_planner.progress_percent }}%
+            </a>
+            {% endif %}
+            {% if exec_prompter.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_prompter.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 프롬프트 {{ exec_prompter.progress_percent }}%
+            </a>
+            {% endif %}
+            {% if exec_generator.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_generator.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 이미지 {{ exec_generator.progress_percent }}%
+            </a>
+            {% endif %}
+            {% if exec_tts.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_tts.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> TTS {{ exec_tts.progress_percent }}%
+            </a>
+            {% endif %}
+            <!-- 토큰 사용량 표시 -->
+            {% if exec_planner.total_tokens or exec_prompter.total_tokens or exec_generator.total_tokens or exec_tts.total_tokens %}
+            <small class="ms-2 text-primary">
+                {% if exec_planner.total_tokens %}씬: {{ exec_planner.total_tokens|floatformat:0 }}t (${{ exec_planner.estimated_cost }}){% endif %}
+                {% if exec_prompter.total_tokens %} | 프롬프트: {{ exec_prompter.total_tokens|floatformat:0 }}t (${{ exec_prompter.estimated_cost }}){% endif %}
+                {% if exec_generator.total_tokens %} | 이미지: {{ exec_generator.total_tokens|floatformat:0 }}t (${{ exec_generator.estimated_cost }}){% endif %}
+                {% if exec_tts.total_tokens %} | TTS: {{ exec_tts.total_tokens|floatformat:0 }}t{% endif %}
+            </small>
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
@@ -371,8 +497,32 @@
             <!-- 전체 이미지 생성 -->
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-1">
                 {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <option value="pro">Pro</option>
+                    <option value="flash">Flash</option>
+                </select>
                 <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <i class="bi bi-images"></i> 전체생성
+                    <i class="bi bi-images"></i> 이미지
+                </button>
+            </form>
+            <!-- 전체 TTS 생성 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ms-1">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <i class="bi bi-mic"></i> TTS
+                </button>
+            </form>
+            <!-- 이미지 + TTS 동시 실행 -->
+            <form method="post" action="{% url 'pipeline:step_execute_parallel' project.pk %}" class="d-inline ms-2">
+                {% csrf_token %}
+                <input type="hidden" name="steps" value="scene_generator">
+                <input type="hidden" name="steps" value="tts_generator">
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <option value="pro">Pro</option>
+                    <option value="flash">Flash</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-primary" {% if scenes.count == 0 %}disabled{% endif %}>
+                    <i class="bi bi-lightning-fill"></i> 이미지+TTS
                 </button>
             </form>
         </div>
@@ -380,23 +530,44 @@
     <div class="collapse {% if scenes.count > 0 %}show{% endif %}" id="scenes-body">
         <div class="step-body p-0">
             {% if scenes.count > 0 %}
+            <!-- 씬 헤더 -->
+            <div class="scene-card" style="background: #f8f9fa; font-weight: bold; font-size: 0.85em; padding: 8px 16px;">
+                <div>#</div>
+                <div>나레이션</div>
+                <div>이미지 프롬프트</div>
+                <div>이미지</div>
+                <div>오디오</div>
+                <div>자막</div>
+                <div>액션</div>
+            </div>
             <!-- 씬 카드 목록 -->
             <div class="scene-list">
                 {% for scene in scenes %}
                 <div class="scene-card" id="scene-{{ scene.scene_number }}">
                     <div class="scene-number">
                         <strong>{{ scene.scene_number }}.</strong>
-                        {% if scene.has_character %}<i class="bi bi-person-fill text-primary" title="캐릭터"></i>{% endif %}
+                        <label class="mb-0" style="cursor: pointer;" title="캐릭터 등장 토글">
+                            <input type="checkbox" class="form-check-input"
+                                   {% if scene.has_character %}checked{% endif %}
+                                   onchange="toggleCharacter({{ scene.scene_number }}, this.checked)">
+                        </label>
                     </div>
                     <div class="scene-narration">
-                        <div class="narration-text">{{ scene.narration }}</div>
+                        <div class="narration-text editable-text"
+                             contenteditable="true"
+                             data-scene="{{ scene.scene_number }}"
+                             data-field="narration"
+                             onblur="saveField(this)"
+                             onkeydown="handleEditKey(event, this)">{{ scene.narration }}</div>
                     </div>
                     <div class="scene-prompt">
-                        {% if scene.image_prompt %}
-                        <div class="prompt-text">{{ scene.image_prompt }}</div>
-                        {% else %}
-                        <div class="prompt-empty text-muted">(프롬프트 없음)</div>
-                        {% endif %}
+                        <div class="prompt-text editable-text"
+                             contenteditable="true"
+                             data-scene="{{ scene.scene_number }}"
+                             data-field="image_prompt"
+                             onblur="saveField(this)"
+                             onkeydown="handleEditKey(event, this)"
+                             {% if not scene.image_prompt %}data-placeholder="(클릭하여 프롬프트 입력)"{% endif %}>{{ scene.image_prompt|default:"" }}</div>
                     </div>
                     <div class="scene-image">
                         {% if scene.image %}
@@ -407,15 +578,55 @@
                         </div>
                         {% endif %}
                     </div>
-                    <div class="scene-actions">
-                        <button class="btn btn-sm btn-outline-primary" onclick="generateSceneImage({{ scene.scene_number }})" title="이미지 생성">
-                            <i class="bi bi-image"></i>
-                        </button>
-                        {% if scene.image %}
-                        <button class="btn btn-sm btn-outline-secondary" onclick="previewImage('{{ scene.image.url }}')" title="크게 보기">
-                            <i class="bi bi-zoom-in"></i>
-                        </button>
+                    <div class="scene-audio" id="audio-container-{{ scene.scene_number }}">
+                        {% if scene.audio %}
+                        <audio controls preload="none">
+                            <source src="{{ scene.audio.url }}" type="audio/wav">
+                        </audio>
+                        {% else %}
+                        <span class="text-muted" style="font-size: 0.8em;"><i class="bi bi-mic-mute"></i> 없음</span>
                         {% endif %}
+                    </div>
+                    <div class="subtitle-status {{ scene.subtitle_status }}" id="subtitle-status-{{ scene.scene_number }}">
+                        {% if scene.subtitle_status == 'matched' %}
+                        <i class="bi bi-check-circle-fill text-success"></i><br>
+                        {{ scene.subtitle_word_count }}자
+                        {% elif scene.subtitle_status == 'mismatch' %}
+                        <i class="bi bi-exclamation-triangle-fill text-danger"></i><br>
+                        {{ scene.subtitle_word_count }}/{{ scene.narration_word_count }}
+                        {% elif scene.audio %}
+                        <i class="bi bi-question-circle text-warning"></i><br>
+                        미검증
+                        {% else %}
+                        <i class="bi bi-dash-circle text-muted"></i><br>
+                        -
+                        {% endif %}
+                    </div>
+                    <div class="scene-actions">
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn {% if scene.image %}btn-outline-warning{% else %}btn-outline-primary{% endif %}"
+                                    onclick="generateSceneImage({{ scene.scene_number }}, 'pro')"
+                                    title="Pro 모델로 생성">
+                                <i class="bi bi-image"></i>
+                            </button>
+                            <button class="btn {% if scene.image %}btn-outline-warning{% else %}btn-outline-primary{% endif %} dropdown-toggle dropdown-toggle-split"
+                                    data-bs-toggle="dropdown" title="모델 선택">
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'pro'); return false;">Pro (고품질)</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'flash'); return false;">Flash (빠름)</a></li>
+                            </ul>
+                        </div>
+                        <button class="btn btn-sm {% if scene.audio %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+                                onclick="generateSceneTTS({{ scene.scene_number }})"
+                                title="{% if scene.audio %}TTS 재생성{% else %}TTS 생성{% endif %}">
+                            <i class="bi bi-mic"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger"
+                                onclick="deleteScene({{ scene.scene_number }})"
+                                title="삭제">
+                            <i class="bi bi-trash"></i>
+                        </button>
                     </div>
                 </div>
                 {% endfor %}
@@ -439,6 +650,22 @@
             <strong>5. 영상 제작</strong>
             {% if project.final_video %}
             <span class="badge bg-success ms-2">완료</span>
+            {% endif %}
+            <!-- 진행 중인 작업 표시 -->
+            {% if exec_video.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_video.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 인트로 {{ exec_video.progress_percent }}%
+            </a>
+            {% endif %}
+            {% if exec_compose.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_compose.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 편집 {{ exec_compose.progress_percent }}%
+            </a>
+            {% endif %}
+            {% if exec_thumb.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_thumb.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 썸네일 {{ exec_thumb.progress_percent }}%
+            </a>
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
@@ -492,6 +719,38 @@
     </div>
 </div>
 {% endwith %}
+
+<!-- 토큰 사용량 요약 -->
+{% if total_tokens > 0 %}
+<div class="card mt-4 border-info">
+    <div class="card-header bg-info text-white py-2">
+        <i class="bi bi-graph-up"></i> <strong>토큰 사용량 요약</strong>
+    </div>
+    <div class="card-body py-2">
+        <div class="row small">
+            {% for step_name, exec in step_executions.items %}
+            {% if exec.total_tokens > 0 %}
+            <div class="col-md-4 col-lg-3 mb-2">
+                <span class="text-muted">{{ exec.step.display_name }}:</span><br>
+                <strong>{{ exec.total_tokens|floatformat:0 }}</strong> 토큰
+                <span class="text-success">(${{ exec.estimated_cost }})</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+        <hr class="my-2">
+        <div class="d-flex justify-content-between align-items-center">
+            <span>
+                <i class="bi bi-calculator"></i>
+                <strong>총 토큰: {{ total_tokens|floatformat:0 }}</strong>
+            </span>
+            <span class="text-success fs-5">
+                <strong>총 비용: ${{ total_cost }}</strong>
+            </span>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- 이미지 미리보기 모달 -->
 <div class="modal fade" id="imagePreviewModal" tabindex="-1">
@@ -585,11 +844,183 @@ function previewImage(url) {
 }
 
 // 씬 이미지 생성 (개별)
-async function generateSceneImage(sceneNumber) {
-    if (!confirm(`씬 ${sceneNumber}의 이미지를 생성하시겠습니까?`)) return;
+async function generateSceneImage(sceneNumber, modelType = 'pro') {
+    const modelName = modelType === 'flash' ? 'Flash' : 'Pro';
+    if (!confirm(`씬 ${sceneNumber}의 이미지를 ${modelName} 모델로 생성하시겠습니까?`)) return;
 
-    // TODO: 개별 씬 이미지 생성 API 호출
-    alert('개별 씬 이미지 생성 기능은 준비 중입니다.');
+    const btn = event.target.closest('.btn-group') || event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+
+    // btn-group이면 모든 버튼 비활성화
+    const buttons = btn.querySelectorAll ? btn.querySelectorAll('button') : [btn];
+    buttons.forEach(b => b.disabled = true);
+
+    try {
+        const formData = new FormData();
+        formData.append('model_type', modelType);
+
+        const response = await fetch(`{% url 'pipeline:scene_generate_image' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            },
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // 이미지 영역 업데이트
+            const sceneCard = document.getElementById(`scene-${sceneNumber}`);
+            const imageDiv = sceneCard.querySelector('.scene-image');
+            imageDiv.innerHTML = `<img src="${data.image_url}" alt="씬 ${sceneNumber}" class="scene-thumbnail" onclick="previewImage('${data.image_url}')">`;
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+        } else {
+            alert(data.message || '이미지 생성 실패');
+            btn.innerHTML = originalHtml;
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+        btn.innerHTML = originalHtml;
+    }
+    buttons.forEach(b => b.disabled = false);
+}
+
+// 씬 TTS 생성 (개별)
+async function generateSceneTTS(sceneNumber) {
+    if (!confirm(`씬 ${sceneNumber}의 TTS를 생성하시겠습니까?`)) return;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+    btn.disabled = true;
+
+    try {
+        const response = await fetch(`{% url 'pipeline:scene_generate_tts' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}'
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // 오디오 영역 업데이트
+            const audioContainer = document.getElementById(`audio-container-${sceneNumber}`);
+            audioContainer.innerHTML = `<audio controls preload="none"><source src="${data.audio_url}" type="audio/wav"></audio>`;
+
+            // 자막 상태 업데이트
+            const subtitleStatus = document.getElementById(`subtitle-status-${sceneNumber}`);
+            if (subtitleStatus) {
+                subtitleStatus.className = `subtitle-status ${data.subtitle_status}`;
+                if (data.subtitle_status === 'matched') {
+                    subtitleStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i><br>${data.subtitle_word_count}자`;
+                } else if (data.subtitle_status === 'mismatch') {
+                    subtitleStatus.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i><br>${data.subtitle_word_count}/${data.narration_word_count}`;
+                } else {
+                    subtitleStatus.innerHTML = `<i class="bi bi-dash-circle"></i><br>-`;
+                }
+            }
+
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+        } else {
+            alert(data.message || 'TTS 생성 실패');
+            btn.innerHTML = originalHtml;
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+        btn.innerHTML = originalHtml;
+    }
+    btn.disabled = false;
+}
+
+// 인라인 편집 - 필드 저장
+let saveTimeout = null;
+async function saveField(element) {
+    const sceneNumber = element.dataset.scene;
+    const field = element.dataset.field;
+    const value = element.innerText.trim();
+
+    // 저장 중 표시
+    element.classList.remove('saved', 'error');
+    element.classList.add('saving');
+
+    try {
+        const formData = new FormData();
+        formData.append(field, value);
+
+        const response = await fetch(`{% url 'pipeline:scene_edit' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData
+        });
+
+        const data = await response.json();
+        element.classList.remove('saving');
+
+        if (data.success) {
+            element.classList.add('saved');
+            setTimeout(() => element.classList.remove('saved'), 1500);
+        } else {
+            element.classList.add('error');
+            console.error('저장 실패:', data.message);
+        }
+    } catch (error) {
+        element.classList.remove('saving');
+        element.classList.add('error');
+        console.error('오류:', error.message);
+    }
+}
+
+// 키 입력 처리 (Enter로 저장, Shift+Enter로 줄바꿈)
+function handleEditKey(event, element) {
+    if (event.key === 'Escape') {
+        element.blur();
+    }
+}
+
+// 캐릭터 등장 토글
+async function toggleCharacter(sceneNumber, hasCharacter) {
+    try {
+        const formData = new FormData();
+        formData.append('has_character', hasCharacter);
+
+        const response = await fetch(`{% url 'pipeline:scene_edit' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData
+        });
+
+        const data = await response.json();
+        if (!data.success) {
+            alert(data.message || '저장 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// 씬 삭제
+async function deleteScene(sceneNumber) {
+    if (!confirm(`씬 ${sceneNumber}을(를) 삭제하시겠습니까?\n삭제 후 씬 번호가 재정렬됩니다.`)) return;
+
+    try {
+        const response = await fetch(`{% url 'pipeline:scene_delete' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
 }
 
 // 초기 글자수 표시

@@ -11,4 +11,6 @@ dependencies = [
     "google-generativeai>=0.8.6",
     "pillow>=12.1.0",
     "python-dotenv>=1.2.1",
+    "replicate>=1.0.0",
+    "requests>=2.31.0",
 ]

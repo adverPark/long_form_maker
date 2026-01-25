@@ -27,6 +27,7 @@
 .log-type-search { color: #dcdcaa; }
 .log-type-result { color: #4ec9b0; }
 .log-type-error { color: #f14c4c; }
+.log-type-warning { color: #cca700; }
 .log-data {
     margin-top: 5px;
     padding-left: 20px;
@@ -300,7 +301,8 @@ class ProgressPoller {
             'info': 'ℹ️',
             'search': '🔍',
             'result': '✅',
-            'error': '❌'
+            'error': '❌',
+            'warning': '⚠️'
         };
         return icons[type] || '•';
     }

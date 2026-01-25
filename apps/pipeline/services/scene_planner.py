@@ -4,6 +4,68 @@ from .base import BaseStepService
 from apps.pipeline.models import Scene
 
 
+def number_to_korean(num_str: str) -> str:
+    """정수를 한글로 변환"""
+    digits = {'0': '영', '1': '일', '2': '이', '3': '삼', '4': '사',
+              '5': '오', '6': '육', '7': '칠', '8': '팔', '9': '구'}
+    num_str = num_str.replace(',', '')
+    try:
+        num = int(num_str)
+    except ValueError:
+        return num_str
+    if num == 0:
+        return '영'
+    result = []
+    units = [(1_0000_0000_0000, '조'), (1_0000_0000, '억'), (1_0000, '만'),
+             (1000, '천'), (100, '백'), (10, '십')]
+    for unit_val, unit_name in units:
+        if num >= unit_val:
+            unit_num = num // unit_val
+            if unit_num == 1 and unit_name in ['천', '백', '십']:
+                result.append(unit_name)
+            else:
+                result.append(number_to_korean(str(unit_num)) + unit_name)
+            num %= unit_val
+    if num > 0:
+        result.append(digits[str(num)])
+    return ''.join(result)
+
+
+def convert_decimal_korean(num_str: str) -> str:
+    """소수점 포함 숫자를 한글로"""
+    digits = {'0': '영', '1': '일', '2': '이', '3': '삼', '4': '사',
+              '5': '오', '6': '육', '7': '칠', '8': '팔', '9': '구'}
+    num_str = num_str.replace(',', '')
+    if '.' in num_str:
+        integer, decimal = num_str.split('.')
+        return number_to_korean(integer) + '점' + ''.join(digits.get(d, d) for d in decimal)
+    return number_to_korean(num_str)
+
+
+def convert_to_tts(text: str) -> str:
+    """narration → narration_tts 변환 (숫자를 한글로)"""
+    result = text
+    suffix_map = {
+        '%': '퍼센트', '조원': '조원', '조': '조', '억원': '억원', '억': '억',
+        '만원': '만원', '만명': '만명', '만': '만', '원': '원', '년': '년',
+        '월': '월', '일': '일', '개': '개', '명': '명', '배': '배', '대': '대',
+        '곳': '곳', '개월': '개월', '위': '위', '호': '호', '번': '번',
+    }
+    ordered_suffixes = ['조원', '억원', '만원', '만명', '개월', '%', '조', '억', '만',
+                        '원', '년', '월', '일', '개', '명', '배', '대', '곳', '위', '호', '번']
+    # 소수점 + 단위
+    for suffix in ordered_suffixes:
+        pattern = rf'(\d+\.\d+)({re.escape(suffix)})'
+        result = re.sub(pattern, lambda m: convert_decimal_korean(m.group(1)) + suffix_map.get(m.group(2), m.group(2)), result)
+    # 정수 + 단위
+    for suffix in ordered_suffixes:
+        pattern = rf'([\d,]+)({re.escape(suffix)})'
+        result = re.sub(pattern, lambda m: number_to_korean(m.group(1)) + suffix_map.get(m.group(2), m.group(2)), result)
+    # 마이너스 처리
+    result = re.sub(r'-(\d+)퍼센트', lambda m: '마이너스 ' + number_to_korean(m.group(1)) + '퍼센트', result)
+    return result
+
+
 class ScenePlannerService(BaseStepService):
     """씬 분할 서비스
 
@@ -89,12 +151,15 @@ class ScenePlannerService(BaseStepService):
 
         self.log('새 씬 저장 중...')
         for i, scene_data in enumerate(scenes_data):
+            narration = scene_data.get('narration', '')
+            # 숫자 → 한글 변환 (TTS용)
+            narration_tts = convert_to_tts(narration)
             Scene.objects.create(
                 project=self.project,
                 scene_number=scene_data.get('scene_id', i + 1),
                 section=self._normalize_section(scene_data.get('section', 'body_1')),
-                narration=scene_data.get('narration', ''),
-                narration_tts=scene_data.get('narration_tts', ''),
+                narration=narration,
+                narration_tts=narration_tts,
                 duration=scene_data.get('duration_seconds', 10),
                 has_character=scene_data.get('character_appears', False),
                 image_prompt='[PLACEHOLDER]',

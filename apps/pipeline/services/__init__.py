@@ -8,6 +8,8 @@ from .scene_generator import SceneGeneratorService
 from .video_generator import VideoGeneratorService
 from .video_composer import VideoComposerService
 from .thumbnail_generator import ThumbnailGeneratorService
+from .tts_generator import TTSGeneratorService
+from .auto_pipeline import AutoPipelineService
 
 # 에이전트 이름 -> 서비스 클래스 매핑
 SERVICE_REGISTRY = {
@@ -17,6 +19,7 @@ SERVICE_REGISTRY = {
     'scene_planner': ScenePlannerService,
     'image_prompter': ImagePrompterService,
     'scene_generator': SceneGeneratorService,
+    'tts_generator': TTSGeneratorService,
     'video_generator': VideoGeneratorService,
     'video_composer': VideoComposerService,
     'thumbnail_generator': ThumbnailGeneratorService,

@@ -13,6 +13,7 @@ class PipelineStep(models.Model):
         ('scene_planner', '씬 분할'),
         ('image_prompter', '이미지 프롬프트'),
         ('scene_generator', '이미지 생성'),
+        ('tts_generator', 'TTS 생성'),
         ('video_generator', '동영상 생성'),
         ('video_composer', '영상 편집'),
         ('thumbnail_generator', '썸네일 생성'),
@@ -49,9 +50,18 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # 프리셋 선택 (전역 설정에서 선택)
+    image_style = models.ForeignKey('ImageStylePreset', on_delete=models.SET_NULL,
+        null=True, blank=True, verbose_name="이미지 스타일")
+    character = models.ForeignKey('CharacterPreset', on_delete=models.SET_NULL,
+        null=True, blank=True, verbose_name="캐릭터")
+    voice = models.ForeignKey('VoicePreset', on_delete=models.SET_NULL,
+        null=True, blank=True, verbose_name="TTS 음성")
+
     # 최종 결과물 (파일)
     final_video = models.FileField(upload_to='projects/videos/', blank=True, null=True, verbose_name="최종 영상")
     thumbnail = models.ImageField(upload_to='projects/thumbnails/', blank=True, null=True, verbose_name="썸네일")
+    full_subtitles = models.FileField(upload_to='projects/subtitles/', blank=True, null=True, verbose_name="전체 자막")
 
     class Meta:
         verbose_name = "프로젝트"
@@ -204,6 +214,12 @@ class Scene(models.Model):
         ('outro', '아웃트로'),
     ]
 
+    SUBTITLE_STATUS_CHOICES = [
+        ('none', '없음'),
+        ('matched', '매칭됨'),
+        ('mismatch', '불일치'),
+    ]
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='scenes')
     scene_number = models.IntegerField(verbose_name="씬 번호")
     section = models.CharField(max_length=20, choices=SECTION_CHOICES, default='body_1', verbose_name="섹션")
@@ -225,6 +241,11 @@ class Scene(models.Model):
     audio = models.FileField(upload_to='projects/scenes/audio/', blank=True, null=True, verbose_name="음성")
     subtitle_file = models.FileField(upload_to='projects/scenes/subtitles/', blank=True, null=True, verbose_name="자막")
 
+    # 자막 검증 상태
+    subtitle_status = models.CharField(max_length=20, choices=SUBTITLE_STATUS_CHOICES, default='none', verbose_name="자막 상태")
+    subtitle_word_count = models.IntegerField(default=0, verbose_name="SRT 단어 수")
+    narration_word_count = models.IntegerField(default=0, verbose_name="원본 단어 수")
+
     class Meta:
         verbose_name = "씬"
         verbose_name_plural = "씬"
@@ -235,21 +256,119 @@ class Scene(models.Model):
         return f"{self.project.name} - 씬 {self.scene_number}"
 
 
-class CharacterSheet(models.Model):
-    """캐릭터 시트"""
-    project = models.OneToOneField(Project, on_delete=models.CASCADE, related_name='character_sheet')
+# =============================================
+# 전역 프리셋 (설정에서 관리, 프로젝트에서 선택)
+# =============================================
 
-    image = models.ImageField(upload_to='projects/characters/', verbose_name="캐릭터 시트")
-    description = models.TextField(blank=True, verbose_name="캐릭터 설명")
+class ImageStylePreset(models.Model):
+    """이미지 스타일 프리셋 - 사용자별 설정"""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='image_styles', null=True, blank=True)
+    name = models.CharField(max_length=100, verbose_name="이름")
+    description = models.TextField(blank=True, verbose_name="설명")
 
+    # 스타일 프롬프트 (영어)
+    style_prompt = models.TextField(verbose_name="스타일 프롬프트",
+        help_text="예: photorealistic, vibrant colors, news documentary style, professional lighting")
+
+    is_default = models.BooleanField(default=False, verbose_name="기본값")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = "캐릭터 시트"
-        verbose_name_plural = "캐릭터 시트"
+        verbose_name = "이미지 스타일"
+        verbose_name_plural = "이미지 스타일"
+        ordering = ['-is_default', 'name']
 
     def __str__(self):
-        return f"{self.project.name} 캐릭터"
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.is_default and self.user:
+            # 같은 사용자의 다른 기본값 해제
+            ImageStylePreset.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+
+
+class StyleSampleImage(models.Model):
+    """스타일 프리셋의 샘플 이미지"""
+    style = models.ForeignKey(ImageStylePreset, on_delete=models.CASCADE, related_name='sample_images')
+    image = models.ImageField(upload_to='presets/styles/', verbose_name="샘플 이미지")
+    description = models.CharField(max_length=200, blank=True, verbose_name="설명")
+    order = models.IntegerField(default=0, verbose_name="순서")
+
+    class Meta:
+        verbose_name = "스타일 샘플 이미지"
+        verbose_name_plural = "스타일 샘플 이미지"
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.style.name} 샘플 {self.order}"
+
+
+class CharacterPreset(models.Model):
+    """캐릭터 프리셋 - 사용자별 설정"""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='characters', null=True, blank=True)
+    name = models.CharField(max_length=100, verbose_name="이름")
+    description = models.TextField(blank=True, verbose_name="설명")
+
+    # 캐릭터 이미지
+    image = models.ImageField(upload_to='presets/characters/', verbose_name="캐릭터 이미지")
+
+    # 캐릭터 프롬프트 설명 (영어)
+    character_prompt = models.TextField(verbose_name="캐릭터 프롬프트",
+        help_text="예: simple webtoon style mascot, curly black hair, round glasses, blue shirt")
+
+    is_default = models.BooleanField(default=False, verbose_name="기본값")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "캐릭터"
+        verbose_name_plural = "캐릭터"
+        ordering = ['-is_default', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.is_default and self.user:
+            CharacterPreset.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+
+
+class VoicePreset(models.Model):
+    """TTS 음성 프리셋 - 사용자별 설정"""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='voices', null=True, blank=True)
+    name = models.CharField(max_length=100, verbose_name="이름")
+    description = models.TextField(blank=True, verbose_name="설명")
+
+    # 참조 음성
+    reference_audio = models.FileField(upload_to='presets/voices/', verbose_name="참조 음성 (WAV)")
+    reference_text = models.TextField(verbose_name="참조 음성 텍스트",
+        help_text="참조 음성에서 말하는 내용")
+
+    # TTS 파라미터
+    temperature = models.FloatField(default=0.7, verbose_name="Temperature")
+    top_p = models.FloatField(default=0.7, verbose_name="Top P")
+    repetition_penalty = models.FloatField(default=1.2, verbose_name="Repetition Penalty")
+    seed = models.IntegerField(default=42, verbose_name="Seed")
+
+    is_default = models.BooleanField(default=False, verbose_name="기본값")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "TTS 음성"
+        verbose_name_plural = "TTS 음성"
+        ordering = ['-is_default', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.is_default and self.user:
+            VoicePreset.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
 
 
 class StepExecution(models.Model):

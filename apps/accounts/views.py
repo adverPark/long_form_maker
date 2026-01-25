@@ -4,7 +4,8 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib import messages
 from django.views.decorators.http import require_POST
-from .models import APIKey, VoiceSample
+from .models import APIKey
+from apps.pipeline.models import ImageStylePreset, StyleSampleImage, CharacterPreset, VoicePreset
 
 
 def login_view(request):
@@ -37,19 +38,26 @@ def settings_view(request):
     from .models import User
 
     api_keys = APIKey.objects.filter(user=request.user)
-    voice_samples = VoiceSample.objects.filter(user=request.user)
 
     # API 키를 서비스별로 그룹화
     gemini_keys = api_keys.filter(service='gemini')
     replicate_keys = api_keys.filter(service='replicate')
 
+    # 프리셋들
+    image_styles = ImageStylePreset.objects.filter(user=request.user)
+    characters = CharacterPreset.objects.filter(user=request.user)
+    voices = VoicePreset.objects.filter(user=request.user)
+
     context = {
         'gemini_keys': gemini_keys,
         'replicate_keys': replicate_keys,
-        'voice_samples': voice_samples,
         'services': APIKey.SERVICE_CHOICES,
         'gemini_model_choices': User.GEMINI_MODEL_CHOICES,
         'current_gemini_model': request.user.gemini_model,
+        # 프리셋들
+        'image_styles': image_styles,
+        'characters': characters,
+        'voices': voices,
     }
     return render(request, 'accounts/settings.html', context)
 
@@ -121,48 +129,6 @@ def set_default_api_key(request, pk):
 
 @login_required
 @require_POST
-def upload_voice(request):
-    """목소리 샘플 업로드"""
-    name = request.POST.get('name')
-    audio_file = request.FILES.get('audio_file')
-
-    if not name or not audio_file:
-        messages.error(request, '이름과 파일을 모두 입력해주세요.')
-        return redirect('accounts:settings')
-
-    VoiceSample.objects.create(
-        user=request.user,
-        name=name,
-        audio_file=audio_file,
-        is_default=not VoiceSample.objects.filter(user=request.user).exists()
-    )
-    messages.success(request, '목소리 샘플이 업로드되었습니다.')
-    return redirect('accounts:settings')
-
-
-@login_required
-@require_POST
-def delete_voice(request, pk):
-    """목소리 샘플 삭제"""
-    VoiceSample.objects.filter(user=request.user, pk=pk).delete()
-    messages.success(request, '목소리 샘플이 삭제되었습니다.')
-    return redirect('accounts:settings')
-
-
-@login_required
-@require_POST
-def set_default_voice(request, pk):
-    """기본 목소리 설정"""
-    voice = VoiceSample.objects.filter(user=request.user, pk=pk).first()
-    if voice:
-        voice.is_default = True
-        voice.save()
-        messages.success(request, f'{voice.name}이(가) 기본 목소리로 설정되었습니다.')
-    return redirect('accounts:settings')
-
-
-@login_required
-@require_POST
 def set_gemini_model(request):
     """Gemini 모델 설정"""
     model = request.POST.get('gemini_model')
@@ -172,3 +138,280 @@ def set_gemini_model(request):
         model_name = 'Gemini 3 Flash' if model == 'flash' else 'Gemini 3 Pro'
         messages.success(request, f'{model_name}으로 변경되었습니다.')
     return redirect('accounts:settings')
+
+
+# =============================================
+# 이미지 스타일 프리셋
+# =============================================
+
+@login_required
+@require_POST
+def save_image_style(request):
+    """이미지 스타일 저장"""
+    name = request.POST.get('name', '').strip()
+    style_prompt = request.POST.get('style_prompt', '').strip()
+    is_default = request.POST.get('is_default') == 'on'
+
+    if not name or not style_prompt:
+        messages.error(request, '이름과 스타일 프롬프트를 입력해주세요.')
+        return redirect('accounts:settings')
+
+    # 첫 번째면 자동으로 기본값
+    if not ImageStylePreset.objects.filter(user=request.user).exists():
+        is_default = True
+
+    style = ImageStylePreset.objects.create(
+        user=request.user,
+        name=name,
+        style_prompt=style_prompt,
+        is_default=is_default
+    )
+
+    # 샘플 이미지 처리
+    for i, img_file in enumerate(request.FILES.getlist('sample_images')):
+        StyleSampleImage.objects.create(
+            style=style,
+            image=img_file,
+            order=i
+        )
+
+    messages.success(request, f'이미지 스타일 "{name}"이(가) 저장되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def delete_image_style(request, pk):
+    """이미지 스타일 삭제"""
+    style = ImageStylePreset.objects.filter(user=request.user, pk=pk).first()
+    if style:
+        name = style.name
+        style.delete()
+        messages.success(request, f'이미지 스타일 "{name}"이(가) 삭제되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def set_default_image_style(request, pk):
+    """기본 이미지 스타일 설정"""
+    style = ImageStylePreset.objects.filter(user=request.user, pk=pk).first()
+    if style:
+        style.is_default = True
+        style.save()
+        messages.success(request, f'"{style.name}"이(가) 기본 스타일로 설정되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def edit_image_style(request, pk):
+    """이미지 스타일 수정"""
+    from django.http import JsonResponse
+
+    style = ImageStylePreset.objects.filter(user=request.user, pk=pk).first()
+    if not style:
+        return JsonResponse({'success': False, 'message': '스타일을 찾을 수 없습니다.'})
+
+    name = request.POST.get('name', '').strip()
+    style_prompt = request.POST.get('style_prompt', '').strip()
+
+    if name:
+        style.name = name
+    if style_prompt:
+        style.style_prompt = style_prompt
+
+    style.save()
+
+    # 새 샘플 이미지가 있으면 기존 이미지 삭제 후 교체
+    new_images = request.FILES.getlist('sample_images')
+    if new_images:
+        # 기존 샘플 이미지 삭제
+        style.sample_images.all().delete()
+        # 새 이미지 추가
+        for i, img_file in enumerate(new_images):
+            StyleSampleImage.objects.create(
+                style=style,
+                image=img_file,
+                order=i
+            )
+
+    return JsonResponse({'success': True, 'message': '저장되었습니다.'})
+
+
+# =============================================
+# 캐릭터 프리셋
+# =============================================
+
+@login_required
+@require_POST
+def save_character(request):
+    """캐릭터 저장"""
+    name = request.POST.get('name', '').strip()
+    character_prompt = request.POST.get('character_prompt', '').strip()
+    image = request.FILES.get('image')
+    is_default = request.POST.get('is_default') == 'on'
+
+    if not name or not character_prompt or not image:
+        messages.error(request, '이름, 캐릭터 프롬프트, 이미지를 모두 입력해주세요.')
+        return redirect('accounts:settings')
+
+    if not CharacterPreset.objects.filter(user=request.user).exists():
+        is_default = True
+
+    CharacterPreset.objects.create(
+        user=request.user,
+        name=name,
+        image=image,
+        character_prompt=character_prompt,
+        is_default=is_default
+    )
+
+    messages.success(request, f'캐릭터 "{name}"이(가) 저장되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def delete_character(request, pk):
+    """캐릭터 삭제"""
+    char = CharacterPreset.objects.filter(user=request.user, pk=pk).first()
+    if char:
+        name = char.name
+        char.delete()
+        messages.success(request, f'캐릭터 "{name}"이(가) 삭제되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def set_default_character(request, pk):
+    """기본 캐릭터 설정"""
+    char = CharacterPreset.objects.filter(user=request.user, pk=pk).first()
+    if char:
+        char.is_default = True
+        char.save()
+        messages.success(request, f'"{char.name}"이(가) 기본 캐릭터로 설정되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def edit_character(request, pk):
+    """캐릭터 수정"""
+    from django.http import JsonResponse
+
+    char = CharacterPreset.objects.filter(user=request.user, pk=pk).first()
+    if not char:
+        return JsonResponse({'success': False, 'message': '캐릭터를 찾을 수 없습니다.'})
+
+    name = request.POST.get('name', '').strip()
+    character_prompt = request.POST.get('character_prompt', '').strip()
+    image = request.FILES.get('image')
+
+    if name:
+        char.name = name
+    if character_prompt:
+        char.character_prompt = character_prompt
+    if image:
+        char.image = image
+
+    char.save()
+    return JsonResponse({'success': True, 'message': '저장되었습니다.'})
+
+
+# =============================================
+# TTS 음성 프리셋
+# =============================================
+
+@login_required
+@require_POST
+def save_voice_preset(request):
+    """TTS 음성 프리셋 저장"""
+    name = request.POST.get('name', '').strip()
+    reference_audio = request.FILES.get('reference_audio')
+    reference_text = request.POST.get('reference_text', '').strip()
+    is_default = request.POST.get('is_default') == 'on'
+
+    if not name or not reference_audio or not reference_text:
+        messages.error(request, '이름, 참조 음성, 참조 텍스트를 모두 입력해주세요.')
+        return redirect('accounts:settings')
+
+    if not VoicePreset.objects.filter(user=request.user).exists():
+        is_default = True
+
+    # TTS 파라미터
+    temperature = float(request.POST.get('temperature', 0.7))
+    top_p = float(request.POST.get('top_p', 0.7))
+    seed = int(request.POST.get('seed', 42))
+
+    VoicePreset.objects.create(
+        user=request.user,
+        name=name,
+        reference_audio=reference_audio,
+        reference_text=reference_text,
+        temperature=temperature,
+        top_p=top_p,
+        seed=seed,
+        is_default=is_default
+    )
+
+    messages.success(request, f'TTS 음성 "{name}"이(가) 저장되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def delete_voice_preset(request, pk):
+    """TTS 음성 프리셋 삭제"""
+    voice = VoicePreset.objects.filter(user=request.user, pk=pk).first()
+    if voice:
+        name = voice.name
+        voice.delete()
+        messages.success(request, f'TTS 음성 "{name}"이(가) 삭제되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def set_default_voice_preset(request, pk):
+    """기본 TTS 음성 설정"""
+    voice = VoicePreset.objects.filter(user=request.user, pk=pk).first()
+    if voice:
+        voice.is_default = True
+        voice.save()
+        messages.success(request, f'"{voice.name}"이(가) 기본 음성으로 설정되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def edit_voice_preset(request, pk):
+    """TTS 음성 프리셋 수정"""
+    from django.http import JsonResponse
+
+    voice = VoicePreset.objects.filter(user=request.user, pk=pk).first()
+    if not voice:
+        return JsonResponse({'success': False, 'message': '음성을 찾을 수 없습니다.'})
+
+    name = request.POST.get('name', '').strip()
+    reference_text = request.POST.get('reference_text', '').strip()
+    reference_audio = request.FILES.get('reference_audio')
+
+    if name:
+        voice.name = name
+    if reference_text:
+        voice.reference_text = reference_text
+    if reference_audio:
+        voice.reference_audio = reference_audio
+
+    # TTS 파라미터
+    if 'temperature' in request.POST:
+        voice.temperature = float(request.POST.get('temperature', 0.7))
+    if 'top_p' in request.POST:
+        voice.top_p = float(request.POST.get('top_p', 0.7))
+    if 'seed' in request.POST:
+        voice.seed = int(request.POST.get('seed', 42))
+
+    voice.save()
+    return JsonResponse({'success': True, 'message': '저장되었습니다.'})

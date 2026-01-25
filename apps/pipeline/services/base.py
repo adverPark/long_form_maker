@@ -25,7 +25,22 @@ GEMINI_PRICING = {
     },
     'gemini-3-pro-preview': {
         'input': Decimal('2.00'),   # $2.00 / 1M tokens
-        'output': Decimal('12.00'), # $12.00 / 1M tokens
+        'output': Decimal('12.00'), # $12.00 / 1M tokens (텍스트)
+    },
+    # 이미지 생성 모델 Pro (이미지 출력은 $120/1M tokens - Vertex AI 기준)
+    # 이미지 1개당 약 1,120 tokens = $0.134 ≈ 150원
+    'gemini-3-pro-image-preview': {
+        'input': Decimal('2.00'),    # $2.00 / 1M tokens
+        'output': Decimal('120.00'), # $120.00 / 1M tokens (이미지 출력)
+    },
+    # 이미지 생성 모델 Flash (훨씬 저렴)
+    'gemini-2.0-flash': {
+        'input': Decimal('0.10'),    # $0.10 / 1M tokens
+        'output': Decimal('0.40'),   # $0.40 / 1M tokens
+    },
+    'gemini-2.0-flash-exp-image-generation': {
+        'input': Decimal('0.10'),    # Flash 기본 가격 적용
+        'output': Decimal('0.40'),   # Flash 기본 가격 적용
     },
 }
 
