@@ -19,7 +19,7 @@ GEMINI_MODELS = {
 # 이미지 생성 모델
 IMAGE_MODELS = {
     'gemini-3-pro': 'gemini-3-pro-image-preview',
-    'gemini-2.5-flash': 'gemini-2.5-flash-preview-05-20',
+    'gemini-2.5-flash': 'gemini-2.5-flash-image',
 }
 
 # 기본 모델
@@ -43,7 +43,7 @@ GEMINI_PRICING = {
     },
     # Gemini 2.5 Flash Image (이미지 출력 $30/1M tokens)
     # 이미지 1개당 약 1,290 tokens = $0.039 ≈ 43원
-    'gemini-2.5-flash-preview-05-20': {
+    'gemini-2.5-flash-image': {
         'input': Decimal('0.15'),    # $0.15 / 1M tokens
         'output': Decimal('30.00'),  # $30.00 / 1M tokens (이미지 출력)
     },
