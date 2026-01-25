@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env file
-load_dotenv(BASE_DIR / '.env')
+# Load .env file (부모 폴더도 로드)
+load_dotenv(BASE_DIR.parent / '.env')  # 부모 폴더 먼저
+load_dotenv(BASE_DIR / '.env')  # 프로젝트 폴더 (덮어쓰기 가능)
 
 # Parent directory (기존 long_form_video)
 LONG_FORM_VIDEO_DIR = BASE_DIR.parent
@@ -18,7 +19,8 @@ OUTPUT_DIR = LONG_FORM_VIDEO_DIR / 'output'
 AGENTS_DIR = LONG_FORM_VIDEO_DIR / '.claude' / 'agents'
 
 # Gemini 설정
-GEMINI_MODEL = 'gemini-2.0-flash'
+GEMINI_MODEL = 'gemini-3-pro-preview'
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
 # Fish Speech TTS 설정
 FISH_SPEECH_URL = 'http://118.216.98.160:9881'
@@ -82,8 +84,14 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "timeout": 30,  # 락 대기 시간 (초)
+        },
     }
 }
+
+# 동시 자동 파이프라인 실행 제한
+MAX_CONCURRENT_PIPELINES = 2
 
 
 # Password validation

@@ -21,16 +21,40 @@ class ImagePrompterService(BaseStepService):
 
     def execute(self):
         self.update_progress(5, '씬 로딩 중...')
-        self.log('이미지 프롬프트 작성 시작')
+
+        # 한글금지 옵션 확인 (체크박스 또는 Flash 모델 설정)
+        no_text_option = self.execution.intermediate_data.get('no_text', False) if self.execution.intermediate_data else False
+        flash_model = getattr(self.project, 'image_model', 'gemini-3-pro') == 'gemini-2.5-flash'
+        self.use_no_text = no_text_option or flash_model
+
+        if self.use_no_text:
+            self.log('이미지 프롬프트 작성 시작 (한글금지 모드 - 텍스트 제외)')
+        else:
+            self.log('이미지 프롬프트 작성 시작 (일반 모드 - 텍스트 포함)')
 
         # DB에서 씬 가져오기
-        scenes = list(self.project.scenes.all().order_by('scene_number'))
+        all_scenes = list(self.project.scenes.all().order_by('scene_number'))
 
-        if not scenes:
+        if not all_scenes:
             raise ValueError('씬이 없습니다. 씬 분할을 먼저 완료해주세요.')
 
-        total = len(scenes)
+        total = len(all_scenes)
         self.log(f'총 {total}개 씬 로드')
+
+        # 프롬프트가 필요한 씬만 필터링 (비어있거나 PLACEHOLDER이거나 너무 짧은 것)
+        scenes_to_process = []
+        for scene in all_scenes:
+            prompt = scene.image_prompt or ''
+            if not prompt or prompt == '[PLACEHOLDER]' or len(prompt.split()) < 15:
+                scenes_to_process.append(scene)
+
+        if not scenes_to_process:
+            self.log('모든 씬에 이미 프롬프트가 있습니다')
+            self.update_progress(100, '완료: 처리할 씬 없음')
+            return
+
+        skipped = total - len(scenes_to_process)
+        self.log(f'처리 대상: {len(scenes_to_process)}개 씬 (기존 프롬프트 {skipped}개 유지)')
 
         # 프롬프트 템플릿 가져오기
         prompt_template = self.get_prompt() or self._get_default_prompt()
@@ -38,14 +62,16 @@ class ImagePrompterService(BaseStepService):
         # 배치로 처리 (5개씩 - 더 디테일한 프롬프트를 위해)
         batch_size = 5
         processed = 0
+        to_process_total = len(scenes_to_process)
 
-        for i in range(0, total, batch_size):
-            batch = scenes[i:i + batch_size]
-            batch_end = min(i + batch_size, total)
+        for i in range(0, to_process_total, batch_size):
+            batch = scenes_to_process[i:i + batch_size]
+            batch_end = min(i + batch_size, to_process_total)
 
-            progress = 10 + int((i / total) * 80)
-            self.update_progress(progress, f'프롬프트 생성 중 ({i + 1}-{batch_end}/{total})...')
-            self.log(f'배치 처리: 씬 {i + 1}-{batch_end}')
+            progress = 10 + int((i / to_process_total) * 80)
+            scene_nums = [s.scene_number for s in batch]
+            self.update_progress(progress, f'프롬프트 생성 중 (씬 {scene_nums})...')
+            self.log(f'배치 처리: 씬 {scene_nums}')
 
             # 배치 프롬프트 생성
             prompts = self._generate_batch_prompts(batch, prompt_template)
@@ -59,16 +85,24 @@ class ImagePrompterService(BaseStepService):
 
         # 검증
         self.update_progress(95, '검증 중...')
-        self._validate_prompts(scenes)
+        self._validate_prompts(all_scenes)
 
         self.log(f'이미지 프롬프트 완료', 'result', {
             'total_scenes': total,
-            'processed': processed
+            'processed': processed,
+            'skipped': skipped
         })
-        self.update_progress(100, f'완료: {processed}개 씬')
+        self.update_progress(100, f'완료: {processed}개 생성 ({skipped}개 유지)')
 
     def _get_default_prompt(self) -> str:
         """기본 시스템 프롬프트"""
+        # 한글금지 모드면 텍스트 제외 프롬프트 사용
+        if getattr(self, 'use_no_text', False):
+            return self._get_flash_prompt()
+        return self._get_pro_prompt()
+
+    def _get_pro_prompt(self) -> str:
+        """Pro 모델용 프롬프트 (한글 텍스트 포함)"""
         return """# 이미지 프롬프트 작성 전문가
 
 대본(narration)을 분석하여 뉴스/다큐멘터리 스타일의 디테일한 이미지 프롬프트를 작성합니다.
@@ -111,6 +145,60 @@ class ImagePrompterService(BaseStepService):
 - 영어로 작성
 - 추상적/모호한 표현 금지
 - 대본 내용이 구체적으로 표현되어야 함"""
+
+    def _get_flash_prompt(self) -> str:
+        """Flash 모델용 프롬프트 (한글 텍스트 완전 제외)"""
+        return """# 이미지 프롬프트 작성 전문가 (NO TEXT MODE)
+
+대본(narration)을 분석하여 뉴스/다큐멘터리 스타일의 디테일한 이미지 프롬프트를 작성합니다.
+
+## 🚨 중요: 텍스트 없는 이미지 전용
+
+이 이미지는 Flash 모델로 생성됩니다. Flash 모델은 텍스트 렌더링이 불안정합니다.
+
+**절대 금지:**
+- ❌ 한글 텍스트 (Korean text)
+- ❌ 영어 텍스트 (English text)
+- ❌ 숫자 텍스트 (numbers as text in image)
+- ❌ "text showing...", "text saying..." 표현
+- ❌ 인포그래픽에 글씨 넣기
+
+**대신 사용:**
+- ✅ 시각적 메타포 (그래프 모양, 화살표 방향)
+- ✅ 색상으로 감정 표현 (빨강=위기, 초록=성장)
+- ✅ 아이콘/심볼 (달러 기호 모양, 집 모양 등)
+- ✅ 실제 장면 묘사 (사람, 건물, 상황)
+
+## 씬 유형별 공식
+
+### 1. 데이터/통계 씬 (숫자 있는 대본)
+"Colorful infographic visualization. Main visual: [3D 차트/그래프 모양]. Rising/falling bars/arrows showing [상승/하락]. NO TEXT. Color scheme: [감정 색상]. Clean modern style with visual hierarchy."
+
+### 2. 현장/실제 상황 씬
+"Colorful realistic scene of [장소]. Setting: [구체적 환경]. Main subject: [피사체]. [상태/동작]. Style: photorealistic with vibrant color grading, cinematic quality. [조명]. NO TEXT."
+
+### 3. 역사/과거 사건 씬
+"Historical documentary style, [시대]. Setting: [장소]. Key visual: [핵심 이미지]. Style: vintage documentary, historical footage look. Sepia/film grain. NO TEXT."
+
+### 4. 캐릭터 등장 씬 (has_character: true)
+"Character as narrator. Character: simple webtoon style mascot, curly black hair, round glasses, blue shirt. Expression: [표정]. Pose: [포즈]. Background: photorealistic [배경], vibrant colors. NO TEXT."
+
+### 5. 개념/추상 설명 씬
+"Conceptual visualization of [개념]. Visual metaphor: [비유 - 구체적 오브젝트로]. Key elements: [구성요소]. Style: clean conceptual illustration. Color: [색상]. Dramatic lighting. NO TEXT."
+
+## 색상으로 의미 전달
+- 위기/하락/경고: 빨강, 어두운 톤
+- 성장/상승/희망: 초록, 밝은 톤
+- 분석/설명/중립: 파랑, 차분한 톤
+- 주의/변화: 주황
+- 역사/과거: 세피아, 빈티지
+
+## 중요!
+- 최소 30단어, 권장 50-80단어
+- 영어로 작성
+- **NO TEXT IN IMAGE** 필수
+- 텍스트 대신 시각적 요소로 대본 내용 표현
+- 추상적/모호한 표현 금지"""
 
     def _generate_batch_prompts(self, batch: list, system_prompt: str) -> list:
         """배치로 프롬프트 생성"""

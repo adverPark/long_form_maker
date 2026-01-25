@@ -41,32 +41,56 @@ class ScriptWriterService(BaseStepService):
         self.update_progress(60, '대본 정제 중...')
         draft_data = self._parse_response(response, research_data)
 
-        # 글자수 확인 및 보강 (최대 3회 시도)
+        # 글자수 확인 및 보강 (1회만 시도)
         char_count = len(draft_data['content'])
         self.log(f'초기 대본 글자수: {char_count}자')
 
-        retry_count = 0
-        max_retries = 3
+        # 가장 긴 버전 = 초기 버전
+        best_content = draft_data['content']
+        best_count = char_count
 
-        while char_count < 7500 and retry_count < max_retries:
-            retry_count += 1
+        # 7500자 미만이면 1회 보강 시도
+        if char_count < 7500:
             needed = 8000 - char_count
-            self.update_progress(60 + (retry_count * 10), f'글자수 부족 ({char_count}자), 보강 중... ({retry_count}/{max_retries})')
-            self.log(f'보강 시도 {retry_count}: {char_count}자 → +{needed}자 필요')
+            self.update_progress(70, f'글자수 부족 ({char_count}자), 보강 중...')
+            self.log(f'보강 시도: {char_count}자 → +{needed}자 필요')
 
-            draft_data['content'] = self._expand_content(draft_data['content'], needed)
-            char_count = len(draft_data['content'])
-            self.log(f'보강 후: {char_count}자')
+            try:
+                # 리서치 전체 데이터
+                research_text = f"""주제: {research_data.get('topic', '')}
+요약: {research_data.get('summary', '')}
+인용구: {research_data.get('quotes', [])}
+숫자/통계: {research_data.get('numbers', [])}
+인물 사례: {research_data.get('person_stories', [])}"""
+
+                expanded = self._expand_content(draft_data['content'], needed, attempt=1, research_summary=research_text)
+                expanded_count = len(expanded)
+
+                self.log(f'보강 결과: {char_count}자 → {expanded_count}자')
+
+                # 늘었으면 적용, 아니면 원본 유지
+                if expanded_count > char_count:
+                    draft_data['content'] = expanded
+                    char_count = expanded_count
+                    best_content = expanded
+                    best_count = expanded_count
+                    self.log(f'보강 성공: {best_count}자')
+                else:
+                    self.log(f'⚠️ 보강 실패 (짧아짐): {char_count}자 → {expanded_count}자. 원본 유지!', 'warning')
+
+            except Exception as e:
+                self.log(f'보강 중 오류: {str(e)[:200]}. 원본 유지!', 'error')
+
+        # 최종: 무조건 가장 긴 버전
+        draft_data['content'] = best_content
+        char_count = best_count
+        self.log(f'최종 대본: {char_count}자')
 
         if char_count < 7500:
-            self.log(f'⚠️ {max_retries}회 보강 후에도 미달: {char_count}자', 'error')
+            self.log(f'⚠️ 글자수 미달: {char_count}자', 'warning')
 
-        if char_count > 8500:
-            self.update_progress(85, f'글자수 초과 ({char_count}자), 압축 중...')
-            draft_data['content'] = self._compress_content(draft_data['content'], char_count - 8000)
-            char_count = len(draft_data['content'])
-
-        # DB에 저장
+        # DB에 저장 (글자수 부족해도 반드시 저장)
+        self.log(f'대본 저장 시작: {char_count}자')
         self.update_progress(90, '저장 중...')
         Draft.objects.update_or_create(
             project=self.project,
@@ -285,6 +309,16 @@ class ScriptWriterService(BaseStepService):
 4. 90초(약 500자)마다 긴장 유도 문장을 넣으세요
 5. 순수 대본만 작성하세요 (화면 지시, 씬 번호 없음)
 
+**대본 구조 (필수!):**
+1. **오프닝 훅** (상황 가정 → 반전)
+2. **로드맵 제시** ("오늘 다룰 내용: 첫째 ~, 둘째 ~, 마지막으로 ~")
+3. **구독/좋아요 요청** ← 로드맵 직후, 본론 들어가기 전에 반드시 삽입!
+   - 예시: "영상 시작하기 전에, 이런 경제 콘텐츠 유익하셨다면 구독과 좋아요 한번 부탁드릴게요. 알림 설정까지 해두시면 새 영상 바로 받아보실 수 있습니다. 자, 그럼 본론으로 들어가 볼게요."
+   - 자연스럽게 1-2문장으로 삽입
+4. **본론** (개념 설명 → 문제점 분석 → 심화)
+5. **액션 플랜** (3가지 행동 지침)
+6. **마무리**
+
 JSON 형식으로 출력하세요."""
 
     def _parse_response(self, response: str, research: dict) -> dict:
@@ -328,27 +362,116 @@ JSON 형식으로 출력하세요."""
             'content': response,
         }
 
-    def _expand_content(self, content: str, needed_chars: int) -> str:
+    def _expand_content(self, content: str, needed_chars: int, attempt: int = 1, research_summary: str = '') -> str:
         """글자수 보강"""
-        expand_prompt = f"""아래 대본의 글자수가 부족합니다. {needed_chars}자 이상 추가해주세요.
+        original_len = len(content)
 
-**보강 방법:**
-1. 비유와 예시를 더 풍부하게
-2. "상황이 보이시나요?" 같은 긴장 유도 문장 추가
-3. 숫자를 일상 물건으로 환산하는 설명 추가
-4. 인물 사례를 더 상세하게
+        # 시도 횟수에 따라 다른 전략 사용
+        if attempt == 1:
+            strategy = "구체적 사례와 비유 추가"
+            extra_instruction = """- 추상적인 설명을 구체적 사례로 확장
+- 숫자는 일상 물건으로 환산 (치킨, 아이폰, 월급 등)
+- "예를 들어", "실제로" 문구 사용"""
+        elif attempt == 2:
+            strategy = "감정과 질문 추가"
+            extra_instruction = """- 시청자 공감 질문 추가 ("혹시 여러분도...?")
+- 감정 유도 문장 ("솔직히 화가 나지 않으세요?")
+- 긴장감 조성 ("근데요, 여기서 끝이 아닙니다")"""
+        else:
+            strategy = "전문가 인용과 미래 전망 추가"
+            extra_instruction = """- 전문가 의견 추가 ("~전문가는 이렇게 말합니다")
+- 미래 시나리오 ("이대로 가면 10년 후...")
+- 대안과 해결책 확장"""
 
-**주의:**
-- 기존 흐름과 자연스럽게 연결
-- 새로운 내용이 아닌 기존 내용의 심화
-- ~잖아요/~거든요 어미 패턴 유지
+        self.log(f'보강 전략 {attempt}: {strategy}')
+        self.log(f'보강 프롬프트 생성 중... (기존 대본 {original_len}자)')
 
-기존 대본:
+        # 리서치 컨텍스트 포함 (전체)
+        research_context = ""
+        if research_summary:
+            research_context = f"""
+**원본 리서치 (이 내용을 기반으로 보강하세요):**
+{research_summary}
+
+---
+"""
+
+        # 보강 위치 지정 (본문 중간중간에 삽입하도록)
+        expand_prompt = f"""현재 대본이 {original_len}자입니다. 8000자가 되도록 {needed_chars}자 이상 추가해야 합니다.
+{research_context}
+**중요: 반드시 {needed_chars}자 이상 추가해주세요!**
+
+**이번 보강 전략: {strategy}**
+{extra_instruction}
+
+**보강 위치:**
+1. 도입부 (500자 이상)
+2. 본론 각 파트 (200-300자씩)
+3. 전환부마다 (100자씩)
+4. 결론 (300자 이상)
+
+**필수:**
+- 대본 전체를 다시 작성하세요
+- 기존 내용 생략 없이 확장만 하세요
+- 리서치 내용과 관련된 추가 설명/사례 포함
+- 최종 글자수가 8000자 이상이어야 합니다
+
+기존 대본 ({original_len}자):
+---
 {content}
+---
 
-보강된 전체 대본을 출력해주세요 (JSON 없이 순수 텍스트만):"""
+위 대본을 보강하여 8000자 이상의 전체 대본을 출력하세요:"""
 
-        return self.call_gemini(expand_prompt)
+        result = self.call_gemini(expand_prompt)
+        new_len = len(result)
+
+        self.log(f'Gemini 결과: {new_len}자 (원본: {original_len}자)')
+
+        # 보강 결과가 오히려 짧아졌으면 원본 유지
+        if new_len < original_len:
+            self.log(f'⚠️ 보강 실패: {original_len}자 → {new_len}자 (원본 유지!)', 'error')
+            return content
+
+        # 차이가 500자 이상 줄었으면 이상한 응답 - 원본 유지
+        if new_len < original_len - 500:
+            self.log(f'⚠️ 이상한 응답 감지: {original_len}자 → {new_len}자 (원본 유지!)', 'error')
+            return content
+
+        # 보강 결과가 거의 안 늘었으면 재시도용으로 직접 추가
+        if new_len < original_len + 300:
+            self.log(f'⚠️ 보강 미미: +{new_len - original_len}자, 추가 문단 생성...', 'warning')
+            # 추가 문단 생성
+            extra_prompt = f"""다음 주제로 500자 분량의 추가 문단을 작성해주세요:
+
+주제: 시청자가 직접 체감할 수 있는 일상 속 영향
+
+조건:
+- "여러분의 장바구니를 한번 떠올려보세요..." 로 시작
+- 구체적인 가격 비교 (작년 vs 올해)
+- "~잖아요/~거든요" 어미 사용
+- 500자 이상
+
+추가 문단만 출력:"""
+            extra = self.call_gemini(extra_prompt)
+            self.log(f'추가 문단: {len(extra)}자 생성됨')
+            if len(extra) > 200:
+                # 결론 앞에 삽입 (rfind는 못찾으면 -1 반환, -1은 truthy라서 or 체이닝 안됨)
+                insert_point = result.rfind('결론')
+                if insert_point == -1:
+                    insert_point = result.rfind('마지막')
+                if insert_point == -1:
+                    insert_point = result.rfind('정리하면')
+                if insert_point == -1:
+                    # 못 찾으면 끝에서 500자 앞에 삽입
+                    insert_point = max(len(result) - 500, len(result) // 2)
+
+                result = result[:insert_point] + "\n\n" + extra + "\n\n" + result[insert_point:]
+                self.log(f'삽입 완료: {len(result)}자')
+            else:
+                self.log(f'추가 문단 너무 짧음: {len(extra)}자', 'warning')
+
+        return result
 
     def _compress_content(self, content: str, excess_chars: int) -> str:
         """글자수 압축"""

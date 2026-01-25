@@ -458,6 +458,102 @@
             </div>
         </div>
     </div>
+
+    <!-- 썸네일 스타일 프리셋 -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-card-image"></i> 썸네일 스타일</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="{% url 'accounts:add_thumbnail_style' %}" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label">스타일 이름</label>
+                        <input type="text" name="name" class="form-control" placeholder="예: 유튜브 경제 채널" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">스타일 타입</label>
+                        <select name="style_type" class="form-select">
+                            <option value="youtube">YouTube (눈에 띄는)</option>
+                            <option value="minimalist">미니멀 (깔끔한)</option>
+                            <option value="bold">볼드 (강렬한)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">예시 이미지</label>
+                        <input type="file" name="example_image" class="form-control" accept="image/*">
+                        <small class="text-muted">참고할 썸네일 예시</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">프롬프트 템플릿</label>
+                        <textarea name="prompt_template" class="form-control" rows="4"
+                                  placeholder="사용 가능한 변수: {title}, {hook}, {main_keyword}, {style_type}"></textarea>
+                        <small class="text-muted">비워두면 기본 템플릿 사용</small>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input type="checkbox" name="is_default" class="form-check-input" id="thumbnail_style_default">
+                        <label class="form-check-label" for="thumbnail_style_default">기본 스타일로 설정</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus-lg"></i> 추가
+                    </button>
+                </form>
+
+                <hr>
+
+                {% if thumbnail_styles %}
+                <ul class="list-group">
+                    {% for style in thumbnail_styles %}
+                    <li class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="d-flex align-items-center"
+                                 onclick="editThumbnailStyle({{ style.pk }}, '{{ style.name|escapejs }}', '{{ style.style_type }}', '{{ style.prompt_template|escapejs }}')"
+                                 style="cursor: pointer; flex: 1;">
+                                {% if style.example_image %}
+                                <img src="{{ style.example_image.url }}" class="me-2" style="width: 50px; height: 30px; object-fit: cover; border-radius: 4px;">
+                                {% else %}
+                                <div class="me-2 bg-light d-flex align-items-center justify-content-center" style="width: 50px; height: 30px; border-radius: 4px;">
+                                    <i class="bi bi-card-image text-muted"></i>
+                                </div>
+                                {% endif %}
+                                <div>
+                                    <strong>{{ style.name }}</strong>
+                                    <span class="badge bg-secondary">{{ style.get_style_type_display }}</span>
+                                    {% if style.is_default %}
+                                    <span class="badge bg-primary">기본</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="btn-group-vertical btn-group-sm">
+                                <button type="button" class="btn btn-sm btn-outline-secondary mb-1"
+                                        onclick="editThumbnailStyle({{ style.pk }}, '{{ style.name|escapejs }}', '{{ style.style_type }}', '{{ style.prompt_template|escapejs }}')">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                {% if not style.is_default %}
+                                <form method="post" action="{% url 'accounts:set_default_thumbnail_style' style.pk %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-primary w-100 mb-1">기본</button>
+                                </form>
+                                {% endif %}
+                                <form method="post" action="{% url 'accounts:delete_thumbnail_style' style.pk %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger w-100"
+                                            onclick="return confirm('정말 삭제하시겠습니까?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted">등록된 썸네일 스타일이 없습니다.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- 이미지 스타일 수정 모달 -->
@@ -576,6 +672,49 @@
     </div>
 </div>
 
+<!-- 썸네일 스타일 수정 모달 -->
+<div class="modal fade" id="editThumbnailStyleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-card-image"></i> 썸네일 스타일 수정</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editThumbnailStyleId">
+                <div class="mb-3">
+                    <label class="form-label">스타일 이름</label>
+                    <input type="text" id="editThumbnailStyleName" class="form-control">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">스타일 타입</label>
+                    <select id="editThumbnailStyleType" class="form-select">
+                        <option value="youtube">YouTube (눈에 띄는)</option>
+                        <option value="minimalist">미니멀 (깔끔한)</option>
+                        <option value="bold">볼드 (강렬한)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">프롬프트 템플릿</label>
+                    <textarea id="editThumbnailStylePrompt" class="form-control" rows="6"
+                              placeholder="사용 가능한 변수: {title}, {hook}, {main_keyword}, {style_type}"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">새 예시 이미지 (선택)</label>
+                    <input type="file" id="editThumbnailStyleImage" class="form-control" accept="image/*">
+                    <small class="text-muted">업로드 시 기존 이미지 대체</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-primary" onclick="saveThumbnailStyle()">
+                    <i class="bi bi-check-lg"></i> 저장
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // CSRF 토큰
 const csrfToken = '{{ csrf_token }}';
@@ -679,6 +818,44 @@ function saveVoice() {
     }
 
     fetch(`/accounts/voice-preset/edit/${pk}/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrfToken },
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '저장 실패');
+        }
+    })
+    .catch(() => alert('저장 중 오류 발생'));
+}
+
+// 썸네일 스타일 수정
+function editThumbnailStyle(pk, name, styleType, promptTemplate) {
+    document.getElementById('editThumbnailStyleId').value = pk;
+    document.getElementById('editThumbnailStyleName').value = name;
+    document.getElementById('editThumbnailStyleType').value = styleType;
+    document.getElementById('editThumbnailStylePrompt').value = promptTemplate;
+    document.getElementById('editThumbnailStyleImage').value = '';
+    new bootstrap.Modal(document.getElementById('editThumbnailStyleModal')).show();
+}
+
+function saveThumbnailStyle() {
+    const pk = document.getElementById('editThumbnailStyleId').value;
+    const formData = new FormData();
+    formData.append('name', document.getElementById('editThumbnailStyleName').value);
+    formData.append('style_type', document.getElementById('editThumbnailStyleType').value);
+    formData.append('prompt_template', document.getElementById('editThumbnailStylePrompt').value);
+
+    const file = document.getElementById('editThumbnailStyleImage').files[0];
+    if (file) {
+        formData.append('example_image', file);
+    }
+
+    fetch(`/accounts/thumbnail-style/edit/${pk}/`, {
         method: 'POST',
         headers: { 'X-CSRFToken': csrfToken },
         body: formData

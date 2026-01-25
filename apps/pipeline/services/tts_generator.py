@@ -202,6 +202,17 @@ class TTSGeneratorService(BaseStepService):
                             filename = f'scene_{scene_num:02d}.wav'
                             scene.audio.save(filename, ContentFile(audio_data), save=False)
 
+                            # 오디오 길이 계산 (WAV 헤더에서)
+                            try:
+                                import wave
+                                import io
+                                with wave.open(io.BytesIO(audio_data), 'rb') as wav:
+                                    frames = wav.getnframes()
+                                    rate = wav.getframerate()
+                                    scene.audio_duration = frames / float(rate)
+                            except:
+                                scene.audio_duration = 0
+
                             # 자막 검증 및 매핑 (원본 narration으로!)
                             if srt_data:
                                 srt_content = srt_data.decode('utf-8')

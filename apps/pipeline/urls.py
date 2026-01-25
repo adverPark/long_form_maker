@@ -30,4 +30,14 @@ urlpatterns = [
 
     # 자동 파이프라인
     path('project/<int:pk>/auto-pipeline/', views.auto_pipeline, name='auto_pipeline'),
+
+    # 미디어 삭제
+    path('project/<int:pk>/delete-final-video/', views.delete_final_video, name='delete_final_video'),
+    path('project/<int:pk>/delete-all-audio/', views.delete_all_audio, name='delete_all_audio'),
+    path('project/<int:pk>/delete-all-images/', views.delete_all_images, name='delete_all_images'),
+
+    # 업로드 정보
+    path('project/<int:pk>/upload-info/', views.upload_info, name='upload_info'),
+    path('project/<int:pk>/upload-info/generate/', views.generate_upload_info, name='generate_upload_info'),
+    path('project/<int:pk>/generate-thumbnail/', views.generate_thumbnail, name='generate_thumbnail'),
 ]

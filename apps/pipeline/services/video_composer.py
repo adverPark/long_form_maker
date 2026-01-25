@@ -275,16 +275,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     def _generate_clips(self, scenes: list):
         """씬별 클립 생성 (이미지/영상 + 오디오 + ASS 자막)"""
         total = len(scenes)
+        self.log(f'클립 생성 시작: 총 {total}개 씬')
+
+        created = 0
+        skipped = 0
+        failed = 0
 
         for i, scene in enumerate(scenes):
             scene_num = scene.scene_number
 
             progress = 30 + int((i / total) * 50)
-            self.update_progress(progress, f'클립 생성 중 ({scene_num}/{total})...')
+            self.update_progress(progress, f'클립 생성 중 ({i + 1}/{total}, 씬 {scene_num})...')
 
             # 오디오 없으면 스킵
             if not scene.audio:
-                self.log(f'씬 {scene_num} 오디오 없음 - 스킵')
+                self.log(f'씬 {scene_num} 오디오 없음 - 스킵', 'warning')
+                skipped += 1
                 continue
 
             # 입력 파일 결정 (동영상 or 이미지)
@@ -295,7 +301,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 input_file = scene.image.path
                 is_video = False
             else:
-                self.log(f'씬 {scene_num} 이미지/영상 없음 - 스킵')
+                self.log(f'씬 {scene_num} 이미지/영상 없음 - 스킵', 'warning')
+                skipped += 1
                 continue
 
             # 클립 경로
@@ -304,6 +311,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             # 이미 있으면 스킵
             if clip_path.exists():
+                skipped += 1
                 continue
 
             # ASS 자막 경로
@@ -313,6 +321,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             audio_duration = self._get_audio_duration(scene.audio.path)
 
             try:
+                self.log(f'씬 {scene_num} 클립 생성 중... ({"동영상" if is_video else "이미지"}, {audio_duration:.1f}초)')
+
                 if is_video:
                     # 동영상 씬: 480p → 1080p 업스케일
                     self._create_clip_from_video(
@@ -326,10 +336,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         clip_path, audio_duration, scene_num
                     )
 
-                self.log(f'씬 {scene_num} 클립 생성 완료')
+                if clip_path.exists():
+                    self.log(f'씬 {scene_num} 클립 생성 완료')
+                    created += 1
+                else:
+                    self.log(f'씬 {scene_num} 클립 파일 생성 안됨', 'error')
+                    failed += 1
 
+            except subprocess.TimeoutExpired:
+                self.log(f'씬 {scene_num} FFmpeg 타임아웃 (300초 초과)', 'error')
+                failed += 1
             except Exception as e:
-                self.log(f'씬 {scene_num} 클립 생성 실패: {str(e)[:50]}', 'error')
+                self.log(f'씬 {scene_num} 클립 생성 실패: {str(e)[:100]}', 'error')
+                failed += 1
+
+        self.log(f'클립 생성 완료: 생성 {created}, 스킵 {skipped}, 실패 {failed}')
 
     def _get_audio_duration(self, audio_path: str) -> float:
         """오디오 길이 확인"""
@@ -343,25 +364,66 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         except:
             return 10.0
 
+    def _get_video_duration(self, video_path: str) -> float:
+        """비디오 길이 확인"""
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'csv=p=0', video_path],
+                capture_output=True, text=True, timeout=10
+            )
+            return float(result.stdout.strip())
+        except:
+            return 5.0
+
     def _create_clip_from_video(self, video_path, audio_path, ass_path, output_path, duration):
-        """동영상 씬 클립 생성 (480p → 1080p 업스케일)"""
-        filter_complex = "scale=1920:1080:flags=lanczos,format=yuv420p"
+        """동영상 씬 클립 생성 (480p → 1080p 업스케일)
+
+        핵심: fps=30 강제 지정하여 이미지 클립과 파라미터 통일!
+        영상이 오디오보다 짧으면 반복 재생
+        """
+        video_duration = self._get_video_duration(video_path)
+
+        # 기본 필터: fps=30 강제, 1080p 스케일, yuv420p
+        # ⚠️ fps=30 필수! 이미지 클립과 파라미터 통일을 위해
+        base_filter = "fps=30,scale=1920:1080:flags=lanczos,format=yuv420p"
+
         if ass_path:
-            filter_complex += f",ass={ass_path}"
+            base_filter += f",ass={ass_path}"
 
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', video_path,
-            '-i', audio_path,
-            '-filter_complex', f'[0:v]{filter_complex}[v]',
-            '-map', '[v]', '-map', '1:a',
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-t', str(duration),
-            str(output_path)
-        ]
+        # 영상이 오디오보다 짧으면 반복 재생 (-stream_loop)
+        if video_duration < duration:
+            self.log(f'영상 반복: {video_duration:.1f}초 → {duration:.1f}초')
 
-        subprocess.run(cmd, capture_output=True, timeout=120)
+            cmd = [
+                'ffmpeg', '-y',
+                '-stream_loop', '-1',  # 무한 반복
+                '-i', video_path,
+                '-i', audio_path,
+                '-filter_complex', f'[0:v]{base_filter}[v]',
+                '-map', '[v]', '-map', '1:a',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-t', str(duration),  # 오디오 길이로 자르기
+                str(output_path)
+            ]
+        else:
+            # 영상이 충분히 길면 그냥 사용
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-i', audio_path,
+                '-filter_complex', f'[0:v]{base_filter}[v]',
+                '-map', '[v]', '-map', '1:a',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-t', str(duration),
+                str(output_path)
+            ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            self.log(f'FFmpeg 오류: {result.stderr[:200]}', 'warning')
 
     def _create_clip_from_image(self, image_path, audio_path, ass_path, output_path, duration, scene_num):
         """이미지 씬 클립 생성 (zoompan 효과)"""
@@ -393,7 +455,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             str(output_path)
         ]
 
-        subprocess.run(cmd, capture_output=True, timeout=180)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            raise Exception(f'FFmpeg 오류: {result.stderr[-300:] if result.stderr else "unknown"}')
 
     # ===========================================
     # 최종 합치기
@@ -434,15 +498,30 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         ]
 
         try:
-            subprocess.run(cmd, capture_output=True, timeout=600)
+            self.log(f'FFmpeg concat 실행 중... ({clip_count}개 클립)')
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+            if result.returncode != 0:
+                self.log(f'FFmpeg concat 실패: {result.stderr[-500:] if result.stderr else "unknown error"}', 'error')
+                return
+
+            if not output_path.exists():
+                self.log(f'출력 파일 생성 안됨: {output_path}', 'error')
+                return
 
             # 프로젝트에 저장
+            file_size = output_path.stat().st_size
+            self.log(f'최종 영상 파일 크기: {file_size / 1024 / 1024:.1f}MB')
+
             with open(output_path, 'rb') as f:
                 self.project.final_video.save('final.mp4', ContentFile(f.read()), save=True)
 
             self.log(f'최종 영상 생성 완료 ({clip_count}개 클립)')
+
+        except subprocess.TimeoutExpired:
+            self.log(f'FFmpeg concat 타임아웃 (600초 초과)', 'error')
         except Exception as e:
-            self.log(f'최종 영상 합성 실패: {str(e)[:50]}', 'error')
+            self.log(f'최종 영상 합성 실패: {type(e).__name__}: {str(e)[:100]}', 'error')
 
     def _merge_full_subtitles(self, scenes: list):
         """전체 자막 SRT 파일 생성 (YouTube 업로드용)"""

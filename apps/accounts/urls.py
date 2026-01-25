@@ -29,4 +29,10 @@ urlpatterns = [
     path('voice-preset/edit/<int:pk>/', views.edit_voice_preset, name='edit_voice_preset'),
     path('voice-preset/delete/<int:pk>/', views.delete_voice_preset, name='delete_voice_preset'),
     path('voice-preset/default/<int:pk>/', views.set_default_voice_preset, name='set_default_voice_preset'),
+
+    # 썸네일 스타일 프리셋
+    path('thumbnail-style/save/', views.add_thumbnail_style, name='add_thumbnail_style'),
+    path('thumbnail-style/edit/<int:pk>/', views.edit_thumbnail_style, name='edit_thumbnail_style'),
+    path('thumbnail-style/delete/<int:pk>/', views.delete_thumbnail_style, name='delete_thumbnail_style'),
+    path('thumbnail-style/default/<int:pk>/', views.set_default_thumbnail_style, name='set_default_thumbnail_style'),
 ]

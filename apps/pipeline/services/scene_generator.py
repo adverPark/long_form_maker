@@ -13,7 +13,9 @@ class SceneGeneratorService(BaseStepService):
     """씬 이미지 생성 서비스
 
     핵심 원칙:
-    - gemini-3-pro-image-preview (Pro) 또는 gemini-2.0-flash-exp-image-generation (Flash) 사용
+    - Project.image_model 설정에 따라 모델 선택:
+      - gemini-3-pro: 고품질, 한글 OK ($0.134/장)
+      - gemini-2.5-flash: 저렴, 한글 불안정 ($0.039/장)
     - Project의 프리셋 설정 사용:
       - image_style: 스타일 프롬프트 + 샘플 이미지
       - character: 캐릭터 이미지 + 프롬프트 (캐릭터 씬에만)
@@ -23,28 +25,31 @@ class SceneGeneratorService(BaseStepService):
     agent_name = 'scene_generator'
     BATCH_SIZE = 5  # 병렬 처리 배치 크기
 
-    # 이미지 생성 모델 옵션
+    # 이미지 생성 모델 매핑
     IMAGE_MODELS = {
-        'pro': {
+        'gemini-3-pro': {
             'api_model': 'gemini-3-pro-image-preview',
             'pricing_model': 'gemini-3-pro-image-preview',
-            'display_name': 'Pro (고품질)',
         },
-        'flash': {
-            'api_model': 'gemini-2.0-flash-exp-image-generation',
-            'pricing_model': 'gemini-2.0-flash',  # Flash 가격 적용
-            'display_name': 'Flash (빠름)',
+        'gemini-2.5-flash': {
+            'api_model': 'gemini-2.5-flash-preview-05-20',
+            'pricing_model': 'gemini-2.5-flash-preview-05-20',
         },
     }
+
+    def get_image_model_config(self) -> dict:
+        """프로젝트 설정에서 이미지 모델 가져오기"""
+        model_key = getattr(self.project, 'image_model', 'gemini-3-pro')
+        return self.IMAGE_MODELS.get(model_key, self.IMAGE_MODELS['gemini-3-pro'])
 
     def execute(self):
         self.update_progress(5, '씬 로딩 중...')
         self._lock = threading.Lock()  # 스레드 안전을 위한 락
 
-        # 모델 선택 (execution.model_type 사용)
-        model_type = self.execution.model_type or 'pro'
-        model_config = self.IMAGE_MODELS.get(model_type, self.IMAGE_MODELS['pro'])
-        self.log(f'이미지 생성 시작 (모델: {model_config["display_name"]})')
+        # 프로젝트 설정에서 이미지 모델 가져오기
+        model_config = self.get_image_model_config()
+        model_key = getattr(self.project, 'image_model', 'gemini-3-pro')
+        self.log(f'이미지 생성 시작 (모델: {model_key}, API: {model_config["api_model"]})')
 
         # DB에서 씬 가져오기
         scenes = list(self.project.scenes.all().order_by('scene_number'))
@@ -63,15 +68,28 @@ class SceneGeneratorService(BaseStepService):
 
         # 생성할 씬 필터링
         scenes_to_process = []
+        skip_image_exists = 0
+        skip_no_prompt = 0
+
         for scene in scenes:
             if scene.image:
                 self.log(f'씬 {scene.scene_number} 건너뜀 - 이미지 존재')
+                skip_image_exists += 1
                 continue
+
+            # 프롬프트가 없거나 PLACEHOLDER면 건너뜀
+            prompt = scene.image_prompt or ''
+            if not prompt or prompt == '[PLACEHOLDER]' or len(prompt.strip()) < 20:
+                self.log(f'씬 {scene.scene_number} 건너뜀 - 프롬프트 없음/부족', 'warning')
+                skip_no_prompt += 1
+                continue
+
             scenes_to_process.append(scene)
 
         if not scenes_to_process:
-            self.log('생성할 씬이 없습니다.')
-            self.update_progress(100, f'완료: 0개 생성')
+            msg = f'생성할 씬 없음 (이미지 존재: {skip_image_exists}, 프롬프트 없음: {skip_no_prompt})'
+            self.log(msg)
+            self.update_progress(100, msg)
             return
 
         self.log(f'{len(scenes_to_process)}개 씬 이미지 생성 예정 (배치 크기: {self.BATCH_SIZE})')
@@ -121,9 +139,12 @@ class SceneGeneratorService(BaseStepService):
         # 완료
         self.log(f'이미지 생성 완료', 'result', {
             'total': total,
-            'completed': success_count
+            'completed': success_count,
+            'skip_image_exists': skip_image_exists,
+            'skip_no_prompt': skip_no_prompt
         })
-        self.update_progress(100, f'완료: {success_count}/{len(scenes_to_process)}개 이미지')
+        skip_msg = f', 스킵: {skip_image_exists + skip_no_prompt}' if (skip_image_exists + skip_no_prompt) > 0 else ''
+        self.update_progress(100, f'완료: {success_count}개 생성{skip_msg}')
 
     def _generate_scene_image_thread(self, scene: Scene, model_config: dict) -> bytes:
         """병렬 처리용 이미지 생성 (각 스레드에서 클라이언트 생성)"""
@@ -158,7 +179,7 @@ class SceneGeneratorService(BaseStepService):
             이미지 바이트 데이터 또는 None
         """
         if model_config is None:
-            model_config = self.IMAGE_MODELS['pro']
+            model_config = self.get_image_model_config()
 
         scene_num = scene.scene_number
 

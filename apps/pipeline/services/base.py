@@ -1,7 +1,9 @@
+import time
 import traceback
 from decimal import Decimal
 from abc import ABC, abstractmethod
 from django.conf import settings
+from django.db import close_old_connections
 from google import genai
 from google.genai import types
 from apps.prompts.models import AgentPrompt
@@ -12,6 +14,12 @@ from apps.accounts.models import APIKey
 GEMINI_MODELS = {
     'flash': 'gemini-3-flash-preview',
     'pro': 'gemini-3-pro-preview',
+}
+
+# 이미지 생성 모델
+IMAGE_MODELS = {
+    'gemini-3-pro': 'gemini-3-pro-image-preview',
+    'gemini-2.5-flash': 'gemini-2.5-flash-preview-05-20',
 }
 
 # 기본 모델
@@ -33,14 +41,11 @@ GEMINI_PRICING = {
         'input': Decimal('2.00'),    # $2.00 / 1M tokens
         'output': Decimal('120.00'), # $120.00 / 1M tokens (이미지 출력)
     },
-    # 이미지 생성 모델 Flash (훨씬 저렴)
-    'gemini-2.0-flash': {
-        'input': Decimal('0.10'),    # $0.10 / 1M tokens
-        'output': Decimal('0.40'),   # $0.40 / 1M tokens
-    },
-    'gemini-2.0-flash-exp-image-generation': {
-        'input': Decimal('0.10'),    # Flash 기본 가격 적용
-        'output': Decimal('0.40'),   # Flash 기본 가격 적용
+    # Gemini 2.5 Flash Image (이미지 출력 $30/1M tokens)
+    # 이미지 1개당 약 1,290 tokens = $0.039 ≈ 43원
+    'gemini-2.5-flash-preview-05-20': {
+        'input': Decimal('0.15'),    # $0.15 / 1M tokens
+        'output': Decimal('30.00'),  # $30.00 / 1M tokens (이미지 출력)
     },
 }
 
@@ -65,6 +70,9 @@ class BaseStepService(ABC):
         except Exception as e:
             error_msg = f"{str(e)}\n{traceback.format_exc()}"
             self.execution.fail(error_msg)
+        finally:
+            # 스레드에서 실행 시 DB 연결 정리
+            close_old_connections()
 
     @abstractmethod
     def execute(self):
@@ -207,23 +215,53 @@ class BaseStepService(ABC):
         # 로그
         self.log(f'토큰: {input_tokens:,} + {output_tokens:,} = {total_tokens:,} (${float(self.execution.estimated_cost):.4f})')
 
-    def call_gemini(self, prompt: str, model_type: str = None) -> str:
-        """Gemini API 호출 (기본)"""
+    def call_gemini(self, prompt: str, model_type: str = None, max_retries: int = 3) -> str:
+        """Gemini API 호출 (재시도 포함)"""
         client = self.get_client()
         model_name = self.get_model_name(model_type)
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                self.log(f'Gemini 호출 중... (시도 {attempt + 1}/{max_retries}, 프롬프트 {len(prompt)}자)')
 
-        # 토큰 사용량 추적
-        self.track_usage(response, model_name)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
 
-        return response.text
+                # 응답 검증
+                if not response or not response.text:
+                    raise ValueError('빈 응답')
 
-    def call_gemini_with_search(self, prompt: str, model_type: str = None) -> dict:
-        """Gemini API 호출 + Google Search grounding
+                # 토큰 사용량 추적
+                self.track_usage(response, model_name)
+
+                self.log(f'Gemini 응답 완료: {len(response.text)}자')
+                return response.text
+
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                # 재시도 가능한 오류인지 확인
+                retriable = any(keyword in error_str for keyword in [
+                    'overload', 'rate limit', 'quota', '429', '503', '500',
+                    'timeout', 'unavailable', 'resource exhausted'
+                ])
+
+                if retriable and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)
+                    self.log(f'API 오류 (시도 {attempt + 1}/{max_retries}): {str(e)[:100]}. {wait_time}초 후 재시도...', 'warning')
+                    time.sleep(wait_time)
+                else:
+                    self.log(f'API 최종 실패: {str(e)[:200]}', 'error')
+                    raise
+
+        raise last_error
+
+    def call_gemini_with_search(self, prompt: str, model_type: str = None, max_retries: int = 3) -> dict:
+        """Gemini API 호출 + Google Search grounding (재시도 포함)
 
         Returns:
             dict: {
@@ -240,11 +278,37 @@ class BaseStepService(ABC):
             google_search=types.GoogleSearch()
         )
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(tools=[search_tool])
-        )
+        last_error = None
+        response = None
+
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(tools=[search_tool])
+                )
+                break  # 성공
+
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                # 재시도 가능한 오류인지 확인
+                retriable = any(keyword in error_str for keyword in [
+                    'overload', 'rate limit', 'quota', '429', '503', '500',
+                    'timeout', 'unavailable', 'resource exhausted'
+                ])
+
+                if retriable and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)
+                    self.log(f'검색 API 오류 (시도 {attempt + 1}/{max_retries}): {str(e)[:100]}. {wait_time}초 후 재시도...', 'warning')
+                    time.sleep(wait_time)
+                else:
+                    raise
+
+        if response is None:
+            raise last_error
 
         # 토큰 사용량 추적
         self.track_usage(response, model_name)

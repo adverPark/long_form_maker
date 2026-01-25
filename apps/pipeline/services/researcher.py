@@ -250,7 +250,7 @@ class ResearcherService(BaseStepService):
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                return self._search_web(query)
+                return self._search_web(query, is_retry=(attempt > 0))
             except Exception as e:
                 last_error = e
                 if attempt < self.MAX_RETRIES - 1:
@@ -266,16 +266,18 @@ class ResearcherService(BaseStepService):
         self.log(f'검색 최종 실패: {str(last_error)}', 'error')
         return f"검색 실패 (3회 재시도 후): {str(last_error)}"
 
-    def _search_web(self, query: str) -> str:
+    def _search_web(self, query: str, is_retry: bool = False) -> str:
         """웹 검색 도구 - Gemini가 호출함
 
         Args:
             query: 검색할 내용 (예: "자영업 폐업률 2025 통계")
+            is_retry: 재시도인 경우 True (카운트 증가 안 함)
 
         Returns:
             검색 결과 텍스트
         """
-        self._search_count += 1
+        if not is_retry:
+            self._search_count += 1
         self.log(f'검색 #{self._search_count}: {query}', 'search')
 
         # 진행률 업데이트 (10~90% 범위)
@@ -416,6 +418,11 @@ search_web 도구로 필요한 정보를 검색하세요.
                 break
 
             candidate = response.candidates[0]
+
+            # content가 없는 경우 체크
+            if not candidate.content or not candidate.content.parts:
+                self.log(f'응답에 content가 없음 (finish_reason: {getattr(candidate, "finish_reason", "unknown")})', 'warning')
+                continue
 
             # Function Call 확인
             function_calls = []

@@ -50,6 +50,14 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # 이미지 생성 모델 선택
+    IMAGE_MODEL_CHOICES = [
+        ('gemini-3-pro', 'Gemini 3 Pro ($0.134/장, 한글 잘됨)'),
+        ('gemini-2.5-flash', 'Gemini 2.5 Flash ($0.039/장, 한글 △)'),
+    ]
+    image_model = models.CharField(max_length=30, choices=IMAGE_MODEL_CHOICES,
+        default='gemini-3-pro', verbose_name="이미지 생성 모델")
+
     # 프리셋 선택 (전역 설정에서 선택)
     image_style = models.ForeignKey('ImageStylePreset', on_delete=models.SET_NULL,
         null=True, blank=True, verbose_name="이미지 스타일")
@@ -57,6 +65,8 @@ class Project(models.Model):
         null=True, blank=True, verbose_name="캐릭터")
     voice = models.ForeignKey('VoicePreset', on_delete=models.SET_NULL,
         null=True, blank=True, verbose_name="TTS 음성")
+    thumbnail_style = models.ForeignKey('ThumbnailStylePreset', on_delete=models.SET_NULL,
+        null=True, blank=True, verbose_name="썸네일 스타일")
 
     # 최종 결과물 (파일)
     final_video = models.FileField(upload_to='projects/videos/', blank=True, null=True, verbose_name="최종 영상")
@@ -241,6 +251,9 @@ class Scene(models.Model):
     audio = models.FileField(upload_to='projects/scenes/audio/', blank=True, null=True, verbose_name="음성")
     subtitle_file = models.FileField(upload_to='projects/scenes/subtitles/', blank=True, null=True, verbose_name="자막")
 
+    # TTS 생성 후 실제 오디오 길이
+    audio_duration = models.FloatField(default=0, verbose_name="실제 오디오 길이(초)")
+
     # 자막 검증 상태
     subtitle_status = models.CharField(max_length=20, choices=SUBTITLE_STATUS_CHOICES, default='none', verbose_name="자막 상태")
     subtitle_word_count = models.IntegerField(default=0, verbose_name="SRT 단어 수")
@@ -371,6 +384,113 @@ class VoicePreset(models.Model):
         super().save(*args, **kwargs)
 
 
+class ThumbnailStylePreset(models.Model):
+    """썸네일 스타일 프리셋 - 사용자별 설정"""
+    STYLE_CHOICES = [
+        ('youtube', 'YouTube (눈에 띄는)'),
+        ('minimalist', '미니멀 (깔끔한)'),
+        ('bold', '볼드 (강렬한)'),
+    ]
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='thumbnail_styles', null=True, blank=True)
+    name = models.CharField(max_length=100, verbose_name="이름")
+    description = models.TextField(blank=True, verbose_name="설명")
+
+    # 스타일 타입
+    style_type = models.CharField(max_length=20, choices=STYLE_CHOICES, default='youtube', verbose_name="스타일 타입")
+
+    # 예시 이미지
+    example_image = models.ImageField(upload_to='presets/thumbnails/', blank=True, null=True, verbose_name="예시 이미지")
+
+    # 썸네일 프롬프트 템플릿
+    prompt_template = models.TextField(verbose_name="프롬프트 템플릿",
+        help_text="사용 가능한 변수: {title}, {hook}, {main_keyword}",
+        default="""YouTube thumbnail for Korean economy video.
+
+Main visual: {main_keyword} related scene
+Korean text: '{title}' (large, bold, contrasting color)
+Style: {style_type}, dramatic lighting
+Emotion: curiosity, urgency
+
+Technical requirements:
+- 16:9 aspect ratio (1280x720)
+- High contrast for mobile visibility
+- Clean composition with focal point
+- Professional financial theme""")
+
+    is_default = models.BooleanField(default=False, verbose_name="기본값")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "썸네일 스타일"
+        verbose_name_plural = "썸네일 스타일"
+        ordering = ['-is_default', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.is_default and self.user:
+            ThumbnailStylePreset.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+
+
+class UploadInfo(models.Model):
+    """YouTube 업로드 정보"""
+    project = models.OneToOneField('Project', on_delete=models.CASCADE, related_name='upload_info')
+
+    # 기본 정보
+    title = models.CharField(max_length=100, verbose_name="제목", help_text="70자 이내 권장")
+    description = models.TextField(blank=True, verbose_name="설명")
+    tags = models.JSONField(default=list, verbose_name="태그")
+
+    # 타임라인 (자동 생성)
+    timeline = models.JSONField(default=list, verbose_name="타임라인",
+        help_text='[{"time": "0:00", "title": "인트로"}, ...]')
+
+    # 썸네일 프롬프트
+    thumbnail_prompt = models.TextField(blank=True, verbose_name="썸네일 프롬프트")
+
+    # 메타 정보
+    category_id = models.CharField(max_length=10, default='25', verbose_name="카테고리 ID")
+    category_name = models.CharField(max_length=50, default='News & Politics', verbose_name="카테고리명")
+    privacy_status = models.CharField(max_length=20, default='private', verbose_name="공개 상태")
+    made_for_kids = models.BooleanField(default=False, verbose_name="아동용")
+    contains_synthetic_media = models.BooleanField(default=True, verbose_name="AI 생성 콘텐츠")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "업로드 정보"
+        verbose_name_plural = "업로드 정보"
+
+    def __str__(self):
+        return f"{self.project.name} 업로드 정보"
+
+    def get_full_description(self) -> str:
+        """타임라인과 태그가 포함된 전체 설명 생성"""
+        parts = [self.description]
+
+        # 타임라인 추가
+        if self.timeline:
+            parts.append("\n\n⏱️ 타임라인")
+            for item in self.timeline:
+                parts.append(f"{item['time']} {item['title']}")
+
+        # 해시태그 추가
+        if self.tags:
+            parts.append("\n")
+            parts.append(" ".join([f"#{tag}" for tag in self.tags]))
+
+        return "\n".join(parts)
+
+    def get_tags_string(self) -> str:
+        """태그를 쉼표로 구분된 문자열로 반환"""
+        return ", ".join(self.tags) if self.tags else ""
+
+
 class StepExecution(models.Model):
     """단계 실행 기록"""
     STATUS_CHOICES = [
@@ -449,7 +569,7 @@ class StepExecution(models.Model):
             data: 추가 데이터 (검색 결과 등)
         """
         log_entry = {
-            'time': timezone.now().strftime('%H:%M:%S'),
+            'time': timezone.localtime().strftime('%H:%M:%S'),
             'type': log_type,
             'message': message,
         }

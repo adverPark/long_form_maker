@@ -66,7 +66,7 @@ Requirements:
 - High contrast, eye-catching design"""
 
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            model = genai.GenerativeModel('gemini-3-pro-image-preview')
 
             if character_sheet.exists():
                 ref_image = Image.open(character_sheet)
@@ -92,7 +92,7 @@ Requirements:
             self._create_placeholder_thumbnail(thumbnail_path, short_title)
 
         except Exception as e:
-            print(f'썸네일 생성 에러: {e}')
+            self.log(f'썸네일 생성 에러: {type(e).__name__}: {str(e)[:200]}', 'error')
             self._create_placeholder_thumbnail(thumbnail_path, short_title)
 
     def _add_text_overlay(self, image: Image.Image, text: str) -> Image.Image:

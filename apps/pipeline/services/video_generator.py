@@ -141,10 +141,46 @@ Only subtle natural movements like blinking, slight head movement, or breathing.
         self.log(f'Replicate API 호출 중... (모델: {self.MODEL_ID})')
 
         try:
-            # replicate 라이브러리 사용 (동기 호출)
-            output = replicate.run(self.MODEL_ID, input=input_params)
+            # 비동기 prediction 생성 (타임아웃 제어 가능)
+            client = replicate.Client(api_token=api_key)
+            prediction = client.predictions.create(
+                model=self.MODEL_ID,
+                input=input_params
+            )
+            self.log(f'Prediction 생성됨: {prediction.id}')
 
-            # output은 URL 또는 URL 리스트
+            # 상태 폴링 (최대 10분)
+            max_wait = 600  # 10분
+            poll_interval = 5  # 5초마다 체크
+            elapsed = 0
+
+            while elapsed < max_wait:
+                prediction.reload()
+                status = prediction.status
+
+                if status == 'succeeded':
+                    self.log(f'Prediction 완료: {prediction.id}')
+                    break
+                elif status == 'failed':
+                    error_msg = getattr(prediction, 'error', 'Unknown error')
+                    self.log(f'Prediction 실패: {error_msg}', 'error')
+                    return None
+                elif status == 'canceled':
+                    self.log(f'Prediction 취소됨', 'error')
+                    return None
+                else:
+                    # starting, processing
+                    if elapsed % 30 == 0:  # 30초마다 로그
+                        self.log(f'Prediction 진행 중... ({status}, {elapsed}초 경과)')
+                    time.sleep(poll_interval)
+                    elapsed += poll_interval
+
+            if elapsed >= max_wait:
+                self.log(f'Prediction 타임아웃 ({max_wait}초 초과)', 'error')
+                return None
+
+            # output 추출
+            output = prediction.output
             video_url = output
             if isinstance(output, list):
                 video_url = output[0]
@@ -153,9 +189,10 @@ Only subtle natural movements like blinking, slight head movement, or breathing.
                 self.log(f'동영상 다운로드 중...')
                 video_response = requests.get(video_url, timeout=300)
                 if video_response.status_code == 200:
+                    self.log(f'다운로드 완료: {len(video_response.content)} bytes')
                     return video_response.content
                 else:
-                    self.log(f'다운로드 실패: {video_response.status_code}', 'error')
+                    self.log(f'다운로드 실패: HTTP {video_response.status_code}', 'error')
                     return None
             else:
                 self.log('출력 URL 없음', 'error')
@@ -164,6 +201,9 @@ Only subtle natural movements like blinking, slight head movement, or breathing.
         except replicate.exceptions.ReplicateError as e:
             self.log(f'Replicate 에러: {str(e)[:200]}', 'error')
             return None
+        except requests.exceptions.Timeout:
+            self.log(f'다운로드 타임아웃', 'error')
+            return None
         except Exception as e:
-            self.log(f'예외 발생: {str(e)[:200]}', 'error')
+            self.log(f'예외 발생: {type(e).__name__}: {str(e)[:200]}', 'error')
             return None

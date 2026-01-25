@@ -110,6 +110,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
 }
 .scene-thumbnail {
     width: 100%;
@@ -119,6 +120,28 @@
 }
 .image-placeholder {
     font-size: 1.5em;
+}
+/* 영상 오버레이 */
+.video-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.video-overlay:hover {
+    background: rgba(0,0,0,0.6);
+}
+.video-overlay i {
+    color: white;
+    font-size: 1.8em;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
 .scene-actions {
     display: flex;
@@ -210,45 +233,30 @@
 <!-- 1. 주제 -->
 {% with exec=step_executions|dict_get:'topic_finder' %}
 <div class="step-section {% if topic %}has-data{% endif %}" id="topic">
-    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#topic-body">
+    <div class="step-header">
         <div>
             <strong>1. 주제</strong>
             {% if topic %}
-            <span class="badge bg-success ms-2">완료</span>
-            <span class="ms-2 text-muted">{{ topic.title|truncatechars:50 }}</span>
+            <span class="ms-2">{{ topic.title|truncatechars:50 }}</span>
             {% endif %}
         </div>
-        <div class="d-inline" onclick="event.stopPropagation();">
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-inline">
+        <div class="d-flex gap-2 align-items-center">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-flex gap-2">
                 {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-play-fill"></i> {% if topic %}수정{% else %}입력{% endif %}
+                <input type="text" name="manual_input" class="form-control form-control-sm" style="width: 400px;"
+                       value="{{ topic.title|default:'' }}" placeholder="주제를 입력하세요">
+                <button type="submit" class="btn btn-sm btn-primary">
+                    <i class="bi bi-check-lg"></i> 저장
                 </button>
             </form>
             {% if topic %}
-            <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}" class="d-inline ms-2">
+            <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}" class="d-inline">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-success"
-                        onclick="return confirm('주제를 기반으로 전체 영상을 자동 생성합니다.\n\n순서:\n1. 리서치\n2. 대본\n3. 씬 분할\n4. 이미지 프롬프트 + TTS\n5. 이미지 생성\n\n계속하시겠습니까?')">
+                        onclick="return confirm('리서치~이미지까지 자동 생성합니다.\n계속하시겠습니까?')">
                     <i class="bi bi-lightning-fill"></i> 자동 생성
                 </button>
             </form>
-            {% endif %}
-        </div>
-    </div>
-    <div class="collapse {% if topic %}show{% endif %}" id="topic-body">
-        <div class="step-body">
-            {% if topic %}
-            <table class="table table-sm mb-0">
-                <tr><th width="80">제목</th><td>{{ topic.title }}</td></tr>
-                {% if topic.url %}<tr><th>URL</th><td><a href="{{ topic.url }}" target="_blank">{{ topic.url|truncatechars:60 }}</a></td></tr>{% endif %}
-                {% if topic.reason %}<tr><th>메모</th><td>{{ topic.reason }}</td></tr>{% endif %}
-            </table>
-            <p class="text-muted small mt-2 mb-0">
-                <i class="bi bi-info-circle"></i> "자동 생성" 버튼으로 리서치~이미지까지 한 번에 실행할 수 있습니다.
-            </p>
-            {% else %}
-            <p class="text-muted mb-0">주제를 입력하세요.</p>
             {% endif %}
         </div>
     </div>
@@ -490,6 +498,10 @@
             <!-- 프롬프트 생성 -->
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="d-inline ms-1">
                 {% csrf_token %}
+                <label class="form-check form-check-inline mb-0" style="font-size: 0.85em;" title="Flash 모델용: 이미지에 텍스트 넣지 않음">
+                    <input type="checkbox" name="no_text" value="1" class="form-check-input">
+                    <span class="form-check-label">한글금지</span>
+                </label>
                 <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
                     <i class="bi bi-chat-text"></i> 프롬프트
                 </button>
@@ -530,6 +542,15 @@
     <div class="collapse {% if scenes.count > 0 %}show{% endif %}" id="scenes-body">
         <div class="step-body p-0">
             {% if scenes.count > 0 %}
+            <!-- 전체 삭제 버튼 -->
+            <div class="d-flex gap-2 p-2 border-bottom bg-light">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteAllImages()">
+                    <i class="bi bi-trash"></i> 이미지 전체 삭제
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteAllAudio()">
+                    <i class="bi bi-trash"></i> 오디오 전체 삭제
+                </button>
+            </div>
             <!-- 씬 헤더 -->
             <div class="scene-card" style="background: #f8f9fa; font-weight: bold; font-size: 0.85em; padding: 8px 16px;">
                 <div>#</div>
@@ -572,6 +593,11 @@
                     <div class="scene-image">
                         {% if scene.image %}
                         <img src="{{ scene.image.url }}" alt="씬 {{ scene.scene_number }}" class="scene-thumbnail" onclick="previewImage('{{ scene.image.url }}')">
+                        {% if scene.video %}
+                        <div class="video-overlay" onclick="event.stopPropagation(); previewVideo('{{ scene.video.url }}', {{ scene.scene_number }})" title="인트로 영상 재생">
+                            <i class="bi bi-play-circle-fill"></i>
+                        </div>
+                        {% endif %}
                         {% else %}
                         <div class="image-placeholder">
                             <i class="bi bi-image text-muted"></i>
@@ -592,8 +618,11 @@
                         <i class="bi bi-check-circle-fill text-success"></i><br>
                         {{ scene.subtitle_word_count }}자
                         {% elif scene.subtitle_status == 'mismatch' %}
-                        <i class="bi bi-exclamation-triangle-fill text-danger"></i><br>
+                        <i class="bi bi-exclamation-triangle-fill text-warning"></i><br>
                         {{ scene.subtitle_word_count }}/{{ scene.narration_word_count }}
+                        {% elif scene.subtitle_status == 'incomplete' %}
+                        <i class="bi bi-x-circle-fill text-danger"></i><br>
+                        {{ scene.subtitle_word_count }}/{{ scene.narration_word_count }} 불완전
                         {% elif scene.audio %}
                         <i class="bi bi-question-circle text-warning"></i><br>
                         미검증
@@ -690,14 +719,23 @@
                     <i class="bi bi-card-image"></i> 썸네일
                 </button>
             </form>
+            <!-- 임시 파일 삭제 -->
+            <button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteFinalVideo()" title="임시 클립, ASS 자막 등 삭제">
+                <i class="bi bi-trash"></i> 초기화
+            </button>
         </div>
     </div>
-    <div class="collapse" id="video-body">
+    <div class="collapse {% if project.final_video %}show{% endif %}" id="video-body">
         <div class="step-body">
             <div class="row">
                 {% if project.final_video %}
                 <div class="col-md-8">
-                    <h6>최종 영상</h6>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">최종 영상</h6>
+                        <a href="{{ project.final_video.url }}" download="{{ project.name }}_final.mp4" class="btn btn-sm btn-success" title="영상 다운로드">
+                            <i class="bi bi-download"></i> 다운로드
+                        </a>
+                    </div>
                     <video controls class="w-100" style="max-height: 400px;">
                         <source src="{{ project.final_video.url }}" type="video/mp4">
                     </video>
@@ -705,8 +743,20 @@
                 {% endif %}
                 {% if project.thumbnail %}
                 <div class="col-md-4">
-                    <h6>썸네일</h6>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">썸네일</h6>
+                        <a href="{{ project.thumbnail.url }}" download="{{ project.name }}_thumbnail.png" class="btn btn-sm btn-outline-success" title="썸네일 다운로드">
+                            <i class="bi bi-download"></i>
+                        </a>
+                    </div>
                     <img src="{{ project.thumbnail.url }}" class="img-fluid">
+                </div>
+                {% endif %}
+                {% if project.full_subtitles %}
+                <div class="col-12 mt-3">
+                    <a href="{{ project.full_subtitles.url }}" download="{{ project.name }}_subtitles.srt" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-file-text"></i> 전체 자막 다운로드 (SRT)
+                    </a>
                 </div>
                 {% endif %}
                 {% if not project.final_video and not project.thumbnail %}
@@ -719,6 +769,119 @@
     </div>
 </div>
 {% endwith %}
+
+<!-- 6. 업로드 정보 -->
+<div class="step-section" id="upload">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#upload-body">
+        <div>
+            <strong>6. 업로드 정보</strong>
+            {% if project.upload_info %}
+            <span class="badge bg-success ms-2">설정됨</span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();" class="d-flex align-items-center gap-2">
+            <select class="form-select form-select-sm" id="upload-model-select" style="width: auto;">
+                <option value="flash">Flash (빠름)</option>
+                <option value="pro">Pro (고품질)</option>
+            </select>
+            <button class="btn btn-sm btn-outline-primary" onclick="generateUploadInfo()">
+                <i class="bi bi-magic"></i> 자동 생성
+            </button>
+            <button class="btn btn-sm btn-outline-success" onclick="saveUploadInfo()">
+                <i class="bi bi-save"></i> 저장
+            </button>
+            <span id="upload-token-info" class="small text-muted"></span>
+        </div>
+    </div>
+    <div class="collapse" id="upload-body">
+        <div class="step-body">
+            <div class="row">
+                <!-- 왼쪽: 입력 폼 -->
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">제목 (70자 이내)</label>
+                        <input type="text" class="form-control" id="upload-title" maxlength="100"
+                            value="{{ project.upload_info.title|default:'' }}"
+                            placeholder="영상 제목">
+                        <small class="text-muted">현재: <span id="title-count">0</span>/70자</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">설명</label>
+                        <textarea class="form-control" id="upload-description" rows="4"
+                            placeholder="영상 설명 (타임라인, 해시태그 자동 추가됨)">{{ project.upload_info.description|default:'' }}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">태그 (쉼표로 구분)</label>
+                        <input type="text" class="form-control" id="upload-tags"
+                            value="{{ project.upload_info.get_tags_string|default:'' }}"
+                            placeholder="경제, 자영업, 재테크, ...">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">타임라인</label>
+                        <div class="bg-light p-2 rounded small" id="upload-timeline">
+                            {% if project.upload_info and project.upload_info.timeline %}
+                            {% for item in project.upload_info.timeline %}
+                            {{ item.time }} {{ item.title }}<br>
+                            {% endfor %}
+                            {% else %}
+                            <span class="text-muted">"자동 생성" 버튼을 누르면 생성됩니다.</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 오른쪽: 썸네일 -->
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">썸네일 스타일</label>
+                        <select class="form-select" id="thumbnail-style-select">
+                            <option value="">스타일 선택 안함</option>
+                            {% for style in thumbnail_styles %}
+                            <option value="{{ style.pk }}" {% if project.thumbnail_style_id == style.pk %}selected{% endif %}>
+                                {{ style.name }} ({{ style.get_style_type_display }}){% if style.is_default %} - 기본{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <small class="text-muted">예시 이미지를 참고하여 생성합니다</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">썸네일 프롬프트</label>
+                        <textarea class="form-control" id="thumbnail-prompt" rows="5"
+                            placeholder="썸네일 이미지 생성 프롬프트">{{ project.upload_info.thumbnail_prompt|default:'' }}</textarea>
+                    </div>
+                    <button class="btn btn-warning mb-3" onclick="generateThumbnail()">
+                        <i class="bi bi-image"></i> 썸네일 생성
+                    </button>
+                    <div id="thumbnail-preview">
+                        {% if project.thumbnail %}
+                        <img src="{{ project.thumbnail.url }}" class="img-fluid rounded shadow">
+                        <div class="mt-2">
+                            <a href="{{ project.thumbnail.url }}" download class="btn btn-sm btn-outline-success">
+                                <i class="bi bi-download"></i> 다운로드
+                            </a>
+                        </div>
+                        {% else %}
+                        <div class="bg-light p-5 text-center rounded">
+                            <i class="bi bi-image text-muted" style="font-size: 3rem;"></i>
+                            <p class="text-muted mt-2">썸네일을 생성하세요</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- 전체 설명 미리보기 -->
+            <div class="mt-4">
+                <label class="form-label fw-bold">전체 설명 미리보기 (복사용)</label>
+                <textarea class="form-control bg-light" id="full-description" rows="10" readonly
+                    onclick="this.select()">{{ project.upload_info.get_full_description|default:'' }}</textarea>
+                <button class="btn btn-sm btn-outline-secondary mt-2" onclick="copyFullDescription()">
+                    <i class="bi bi-clipboard"></i> 복사
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- 토큰 사용량 요약 -->
 {% if total_tokens > 0 %}
@@ -762,6 +925,23 @@
             </div>
             <div class="modal-body text-center">
                 <img id="previewImg" src="" alt="미리보기">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 영상 미리보기 모달 -->
+<div class="modal fade" id="videoPreviewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">씬 <span id="videoSceneNum"></span> 인트로 영상</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center p-0">
+                <video id="previewVideo" controls class="w-100" style="max-height: 70vh;">
+                    <source src="" type="video/mp4">
+                </video>
             </div>
         </div>
     </div>
@@ -843,6 +1023,22 @@ function previewImage(url) {
     new bootstrap.Modal(document.getElementById('imagePreviewModal')).show();
 }
 
+// 영상 미리보기
+function previewVideo(url, sceneNumber) {
+    const video = document.getElementById('previewVideo');
+    video.querySelector('source').src = url;
+    video.load();
+    document.getElementById('videoSceneNum').textContent = sceneNumber;
+
+    const modal = new bootstrap.Modal(document.getElementById('videoPreviewModal'));
+    modal.show();
+
+    // 모달 닫힐 때 영상 정지
+    document.getElementById('videoPreviewModal').addEventListener('hidden.bs.modal', function() {
+        video.pause();
+    }, { once: true });
+}
+
 // 씬 이미지 생성 (개별)
 async function generateSceneImage(sceneNumber, modelType = 'pro') {
     const modelName = modelType === 'flash' ? 'Flash' : 'Pro';
@@ -916,11 +1112,13 @@ async function generateSceneTTS(sceneNumber) {
             if (subtitleStatus) {
                 subtitleStatus.className = `subtitle-status ${data.subtitle_status}`;
                 if (data.subtitle_status === 'matched') {
-                    subtitleStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i><br>${data.subtitle_word_count}자`;
+                    subtitleStatus.innerHTML = `<i class="bi bi-check-circle-fill text-success"></i><br>${data.subtitle_word_count}자`;
                 } else if (data.subtitle_status === 'mismatch') {
-                    subtitleStatus.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i><br>${data.subtitle_word_count}/${data.narration_word_count}`;
+                    subtitleStatus.innerHTML = `<i class="bi bi-exclamation-triangle-fill text-warning"></i><br>${data.subtitle_word_count}/${data.narration_word_count}`;
+                } else if (data.subtitle_status === 'incomplete') {
+                    subtitleStatus.innerHTML = `<i class="bi bi-x-circle-fill text-danger"></i><br>${data.subtitle_word_count}/${data.narration_word_count} 불완전`;
                 } else {
-                    subtitleStatus.innerHTML = `<i class="bi bi-dash-circle"></i><br>-`;
+                    subtitleStatus.innerHTML = `<i class="bi bi-dash-circle text-muted"></i><br>-`;
                 }
             }
 
@@ -1021,6 +1219,247 @@ async function deleteScene(sceneNumber) {
     } catch (error) {
         alert('오류: ' + error.message);
     }
+}
+
+// 이미지 전체 삭제
+async function deleteAllImages() {
+    if (!confirm('모든 씬의 이미지를 삭제하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_all_images" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// 오디오 전체 삭제
+async function deleteAllAudio() {
+    if (!confirm('모든 씬의 오디오와 자막을 삭제하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_all_audio" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// 영상 제작 초기화 (임시 파일 삭제, 씬 영상은 유지)
+async function deleteFinalVideo() {
+    if (!confirm('영상 편집 파일을 삭제합니다:\n\n• 최종 영상\n• 임시 클립\n• ASS 자막\n• 전체 자막\n\n※ 씬 영상(인트로)은 유지됩니다.\n\n삭제 후 "최종편집"을 다시 실행하세요.\n\n계속하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_final_video" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// =============================================
+// 업로드 정보 관련
+// =============================================
+
+// 제목 글자수 표시
+const uploadTitleInput = document.getElementById('upload-title');
+const titleCountSpan = document.getElementById('title-count');
+
+if (uploadTitleInput) {
+    uploadTitleInput.addEventListener('input', function() {
+        titleCountSpan.textContent = this.value.length;
+        if (this.value.length > 70) {
+            titleCountSpan.classList.add('text-danger');
+        } else {
+            titleCountSpan.classList.remove('text-danger');
+        }
+    });
+    // 초기값 표시
+    titleCountSpan.textContent = uploadTitleInput.value.length;
+}
+
+// 업로드 정보 자동 생성
+async function generateUploadInfo() {
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 생성 중...';
+
+    // 모델 선택
+    const modelType = document.getElementById('upload-model-select').value;
+    const formData = new FormData();
+    formData.append('model_type', modelType);
+
+    try {
+        const response = await fetch("{% url 'pipeline:generate_upload_info' project.pk %}", {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            document.getElementById('upload-title').value = data.title || '';
+            document.getElementById('upload-description').value = data.description || '';
+            document.getElementById('upload-tags').value = data.tags ? data.tags.join(', ') : '';
+            document.getElementById('thumbnail-prompt').value = data.thumbnail_prompt || '';
+            document.getElementById('full-description').value = data.full_description || '';
+
+            // 타임라인 표시
+            const timelineDiv = document.getElementById('upload-timeline');
+            if (data.timeline && data.timeline.length > 0) {
+                timelineDiv.innerHTML = data.timeline.map(t => `${t.time} ${t.title}`).join('<br>');
+            }
+
+            // 제목 글자수 업데이트
+            titleCountSpan.textContent = (data.title || '').length;
+
+            // 토큰 정보 표시
+            const tokenInfoSpan = document.getElementById('upload-token-info');
+            if (data.token_info && data.token_info.total > 0) {
+                tokenInfoSpan.innerHTML = `<i class="bi bi-coin"></i> ${data.token_info.total.toLocaleString()} 토큰 ($${data.token_info.cost})`;
+            }
+
+            alert('업로드 정보가 생성되었습니다.');
+        } else {
+            alert(data.message || '생성 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
+// 업로드 정보 저장
+async function saveUploadInfo() {
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    const formData = new FormData();
+    formData.append('title', document.getElementById('upload-title').value);
+    formData.append('description', document.getElementById('upload-description').value);
+    formData.append('tags', document.getElementById('upload-tags').value);
+    formData.append('thumbnail_prompt', document.getElementById('thumbnail-prompt').value);
+
+    try {
+        const response = await fetch("{% url 'pipeline:upload_info' project.pk %}", {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert(data.message);
+        } else {
+            alert(data.message || '저장 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
+// 썸네일 생성
+async function generateThumbnail() {
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 생성 중...';
+
+    const prompt = document.getElementById('thumbnail-prompt').value;
+    if (!prompt.trim()) {
+        alert('썸네일 프롬프트를 입력해주세요.');
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('prompt', prompt);
+    // 선택된 썸네일 스타일 ID 추가
+    const styleSelect = document.getElementById('thumbnail-style-select');
+    if (styleSelect && styleSelect.value) {
+        formData.append('style_id', styleSelect.value);
+    }
+
+    try {
+        const response = await fetch("{% url 'pipeline:generate_thumbnail' project.pk %}", {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const previewDiv = document.getElementById('thumbnail-preview');
+            previewDiv.innerHTML = `
+                <img src="${data.thumbnail_url}" class="img-fluid rounded shadow">
+                <div class="mt-2">
+                    <a href="${data.thumbnail_url}" download class="btn btn-sm btn-outline-success">
+                        <i class="bi bi-download"></i> 다운로드
+                    </a>
+                </div>
+            `;
+        } else {
+            alert(data.message || '썸네일 생성 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
+// 전체 설명 복사
+function copyFullDescription() {
+    const textarea = document.getElementById('full-description');
+    textarea.select();
+    document.execCommand('copy');
+    alert('복사되었습니다!');
 }
 
 // 초기 글자수 표시

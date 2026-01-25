@@ -61,7 +61,17 @@
                 <div class="mb-3">
                     <span class="badge bg-secondary">
                         <i class="bi bi-cpu"></i>
-                        {% if execution.model_type == 'pro' %}Gemini 3 Pro{% else %}Gemini 3 Flash{% endif %}
+                        {% if execution.step.name == 'video_generator' %}
+                            Replicate seedance-1-pro
+                        {% elif execution.step.name == 'tts_generator' %}
+                            Fish Speech
+                        {% elif execution.step.name == 'video_composer' %}
+                            FFmpeg
+                        {% elif execution.step.name == 'scene_generator' %}
+                            {{ project.image_model|default:'gemini-3-pro' }}
+                        {% else %}
+                            {% if execution.model_type == 'pro' %}Gemini 3 Pro{% else %}Gemini 3 Flash{% endif %}
+                        {% endif %}
                     </span>
                 </div>
 

@@ -93,6 +93,44 @@
 <form method="post">
     {% csrf_token %}
 
+    <!-- 이미지 생성 모델 선택 -->
+    <div class="preset-card">
+        <div class="preset-header">
+            <i class="bi bi-gpu-card"></i> 이미지 생성 모델
+        </div>
+        <div class="preset-body">
+            {% for value, label in image_model_choices %}
+            <label class="preset-option {% if project.image_model == value %}selected{% endif %}">
+                <input type="radio" name="image_model" value="{{ value }}"
+                       {% if project.image_model == value %}checked{% endif %}>
+                <div class="preset-preview">
+                    {% if value == 'gemini-3-pro' %}
+                    <i class="bi bi-stars text-warning"></i>
+                    {% else %}
+                    <i class="bi bi-lightning-charge text-primary"></i>
+                    {% endif %}
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">
+                        {% if value == 'gemini-3-pro' %}
+                        Gemini 3 Pro
+                        <span class="badge bg-warning text-dark">고품질</span>
+                        {% else %}
+                        Gemini 2.5 Flash
+                        <span class="badge bg-success">저렴</span>
+                        {% endif %}
+                    </div>
+                    <div class="preset-desc">{{ label }}</div>
+                </div>
+            </label>
+            {% endfor %}
+            <div class="alert alert-warning mt-2 mb-0" style="font-size: 0.85em;">
+                <i class="bi bi-exclamation-triangle"></i>
+                <strong>Flash 모델 사용 시:</strong> 한글 텍스트가 불안정하므로 이미지 프롬프트에서 텍스트가 자동 제외됩니다.
+            </div>
+        </div>
+    </div>
+
     <!-- 이미지 스타일 선택 -->
     <div class="preset-card">
         <div class="preset-header">
@@ -226,6 +264,54 @@
             <div class="no-preset">
                 <i class="bi bi-mic display-6"></i>
                 <p class="mt-2 mb-0">등록된 음성이 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 썸네일 스타일 선택 -->
+    <div class="preset-card">
+        <div class="preset-header">
+            <i class="bi bi-card-image"></i> 썸네일 스타일
+        </div>
+        <div class="preset-body">
+            {% if thumbnail_styles %}
+            <label class="preset-option {% if not project.thumbnail_style %}selected{% endif %}">
+                <input type="radio" name="thumbnail_style" value="" {% if not project.thumbnail_style %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-x-lg text-muted"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">선택 안함</div>
+                    <div class="preset-desc">기본 썸네일 스타일 사용</div>
+                </div>
+            </label>
+
+            {% for style in thumbnail_styles %}
+            <label class="preset-option {% if project.thumbnail_style_id == style.pk %}selected{% endif %}">
+                <input type="radio" name="thumbnail_style" value="{{ style.pk }}"
+                       {% if project.thumbnail_style_id == style.pk %}checked{% endif %}>
+                <div class="preset-preview">
+                    {% if style.example_image %}
+                    <img src="{{ style.example_image.url }}" alt="">
+                    {% else %}
+                    <i class="bi bi-card-image text-muted"></i>
+                    {% endif %}
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">
+                        {{ style.name }}
+                        <span class="badge bg-secondary">{{ style.get_style_type_display }}</span>
+                        {% if style.is_default %}<span class="badge bg-primary default-badge">기본</span>{% endif %}
+                    </div>
+                    <div class="preset-desc">{{ style.prompt_template|truncatechars:80 }}</div>
+                </div>
+            </label>
+            {% endfor %}
+            {% else %}
+            <div class="no-preset">
+                <i class="bi bi-card-image display-6"></i>
+                <p class="mt-2 mb-0">등록된 썸네일 스타일이 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
             </div>
             {% endif %}
         </div>

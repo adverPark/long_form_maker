@@ -111,14 +111,18 @@ class SceneInline(admin.TabularInline):
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ['name', 'user', 'status', 'image_style', 'character', 'voice', 'get_current_step', 'created_at']
-    list_filter = ['status', 'user', 'image_style', 'character', 'voice']
+    list_display = ['name', 'user', 'status', 'image_model', 'image_style', 'character', 'voice', 'get_current_step', 'created_at']
+    list_filter = ['status', 'user', 'image_model', 'image_style', 'character', 'voice']
     search_fields = ['name']
     readonly_fields = ['created_at', 'updated_at']
     inlines = [TopicInline, ResearchInline, DraftInline]
     fieldsets = (
         (None, {
             'fields': ('user', 'name', 'status'),
+        }),
+        ('이미지 생성', {
+            'fields': ('image_model',),
+            'description': 'Gemini 3 Pro: 고품질, 한글 OK ($0.134/장) | Gemini 2.5 Flash: 저렴, 한글 불안정 ($0.039/장)',
         }),
         ('프리셋 설정', {
             'fields': ('image_style', 'character', 'voice'),
