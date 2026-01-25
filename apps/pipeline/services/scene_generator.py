@@ -32,8 +32,8 @@ class SceneGeneratorService(BaseStepService):
             'pricing_model': 'gemini-3-pro-image-preview',
         },
         'gemini-2.5-flash': {
-            'api_model': 'gemini-2.5-flash-preview-05-20',
-            'pricing_model': 'gemini-2.5-flash-preview-05-20',
+            'api_model': 'gemini-2.5-flash-image',
+            'pricing_model': 'gemini-2.5-flash-image',
         },
     }
 
