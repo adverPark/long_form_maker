@@ -94,12 +94,20 @@ class BaseStepService(ABC):
     def get_gemini_key(self) -> str:
         """사용자의 기본 Gemini API 키 가져오기"""
         try:
+            # 모든 Gemini 키 조회
+            all_keys = list(self.user.api_keys.filter(service='gemini'))
+            self.log(f'Gemini 키 {len(all_keys)}개 발견: {[(k.pk, k.is_default) for k in all_keys]}')
+
             api_key = self.user.api_keys.filter(service='gemini', is_default=True).first()
             if not api_key:
+                self.log('기본 키 없음, 첫 번째 키 사용', 'warning')
                 api_key = self.user.api_keys.filter(service='gemini').first()
             if not api_key:
                 raise ValueError('Gemini API 키가 설정되지 않았습니다.')
-            return api_key.get_key()
+
+            key_value = api_key.get_key()
+            self.log(f'사용할 키: ID={api_key.pk}, is_default={api_key.is_default}, key={key_value[:15]}...')
+            return key_value
         except APIKey.DoesNotExist:
             raise ValueError('Gemini API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.')
 

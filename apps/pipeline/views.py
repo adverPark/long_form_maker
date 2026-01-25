@@ -10,6 +10,7 @@ from .models import (
     ImageStylePreset, CharacterPreset, VoicePreset, ThumbnailStylePreset, UploadInfo
 )
 from .services import get_service_class
+from apps.accounts.models import APIKey
 
 
 @login_required
@@ -1001,9 +1002,13 @@ def generate_upload_info(request, pk):
 
     # LLM으로 제목 + 설명 + 타임라인 생성
     try:
-        api_key = settings.GEMINI_API_KEY
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다.")
+        # 사용자의 Gemini API 키 가져오기
+        api_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+        if not api_key_obj:
+            api_key_obj = APIKey.objects.filter(user=request.user, service='gemini').first()
+        if not api_key_obj:
+            return JsonResponse({'success': False, 'message': 'Gemini API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.'})
+        api_key = api_key_obj.get_key()
         client = genai.Client(api_key=api_key)
 
         # 씬 정보를 텍스트로 변환 (시간 + 나레이션)
@@ -1197,8 +1202,13 @@ def generate_thumbnail(request, pk):
         thumbnail_style = project.thumbnail_style
 
     try:
-        # Gemini 클라이언트
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        # 사용자의 Gemini API 키 가져오기
+        api_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+        if not api_key_obj:
+            api_key_obj = APIKey.objects.filter(user=request.user, service='gemini').first()
+        if not api_key_obj:
+            return JsonResponse({'success': False, 'message': 'Gemini API 키가 설정되지 않았습니다.'})
+        client = genai.Client(api_key=api_key_obj.get_key())
 
         # 프롬프트에 기술 요구사항 추가
         full_prompt = f"""{prompt}

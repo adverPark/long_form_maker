@@ -38,7 +38,8 @@ class ThumbnailGeneratorService(BaseStepService):
 
     def _generate_thumbnail(self, title: str, scenes: list, project_path: Path, gemini_key: str):
         """썸네일 이미지 생성 (1280x720)"""
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
         from PIL import Image, ImageDraw, ImageFont
         import io
 
@@ -50,7 +51,8 @@ class ThumbnailGeneratorService(BaseStepService):
         # 제목에서 핵심 키워드 추출 (10자 이내)
         short_title = title[:10] if len(title) > 10 else title
 
-        genai.configure(api_key=gemini_key)
+        # 신 SDK 클라이언트 생성
+        client = genai.Client(api_key=gemini_key)
 
         prompt = f"""Create a YouTube thumbnail for an economics video.
 Title: {title}
@@ -66,18 +68,40 @@ Requirements:
 - High contrast, eye-catching design"""
 
         try:
-            model = genai.GenerativeModel('gemini-3-pro-image-preview')
+            self.log(f'Gemini 이미지 생성 중... (키: {gemini_key[:10]}...)')
 
+            # 캐릭터 시트가 있으면 참조 이미지로 사용
             if character_sheet.exists():
+                self.log('캐릭터 시트 참조 사용')
                 ref_image = Image.open(character_sheet)
-                response = model.generate_content([prompt, ref_image])
-            else:
-                response = model.generate_content(prompt)
+                # 이미지를 bytes로 변환
+                img_byte_arr = io.BytesIO()
+                ref_image.save(img_byte_arr, format='PNG')
+                img_bytes = img_byte_arr.getvalue()
 
-            # 이미지 추출
-            if hasattr(response, 'candidates') and response.candidates:
+                response = client.models.generate_content(
+                    model='gemini-3-pro-image-preview',
+                    contents=[
+                        types.Part.from_bytes(data=img_bytes, mime_type='image/png'),
+                        prompt
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_modalities=['IMAGE', 'TEXT']
+                    )
+                )
+            else:
+                response = client.models.generate_content(
+                    model='gemini-3-pro-image-preview',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_modalities=['IMAGE', 'TEXT']
+                    )
+                )
+
+            # 이미지 추출 (신 SDK)
+            if response.candidates:
                 for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data:
+                    if part.inline_data and part.inline_data.data:
                         image_data = part.inline_data.data
                         image = Image.open(io.BytesIO(image_data))
                         image = image.resize((1280, 720), Image.Resampling.LANCZOS)
@@ -86,9 +110,11 @@ Requirements:
                         image = self._add_text_overlay(image, short_title)
 
                         image.save(thumbnail_path)
+                        self.log(f'썸네일 저장 완료: {thumbnail_path}')
                         return
 
-            # 실패 시 플레이스홀더
+            # 이미지 없음
+            self.log('Gemini 응답에 이미지 없음', 'warning')
             self._create_placeholder_thumbnail(thumbnail_path, short_title)
 
         except Exception as e:
