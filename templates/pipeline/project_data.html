@@ -506,13 +506,9 @@
                     <i class="bi bi-chat-text"></i> 프롬프트
                 </button>
             </form>
-            <!-- 전체 이미지 생성 -->
+            <!-- 전체 이미지 생성 (모델은 프로젝트 설정에서 선택) -->
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-1">
                 {% csrf_token %}
-                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <option value="pro">Pro</option>
-                    <option value="flash">Flash</option>
-                </select>
                 <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
                     <i class="bi bi-images"></i> 이미지
                 </button>
