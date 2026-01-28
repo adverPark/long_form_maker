@@ -52,8 +52,10 @@ class Project(models.Model):
 
     # 이미지 생성 모델 선택
     IMAGE_MODEL_CHOICES = [
-        ('gemini-3-pro', 'Gemini 3 Pro ($0.134/장, 한글 잘됨)'),
+        ('gemini-3-pro', 'Gemini 3 Pro ($0.134/장, 한글 OK)'),
         ('gemini-2.5-flash', 'Gemini 2.5 Flash ($0.039/장, 한글 △)'),
+        ('flux-schnell', 'Replicate FLUX.1-schnell ($0.003/장, 빠름)'),
+        ('sdxl', 'Replicate SDXL ($0.005/장)'),
     ]
     image_model = models.CharField(max_length=30, choices=IMAGE_MODEL_CHOICES,
         default='gemini-3-pro', verbose_name="이미지 생성 모델")
@@ -80,6 +82,42 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+    def delete(self, *args, **kwargs):
+        """프로젝트 삭제 시 관련 파일도 함께 삭제"""
+        import glob
+        from pathlib import Path
+        from django.conf import settings
+
+        # 씬의 파일들 삭제
+        for scene in self.scenes.all():
+            if scene.image:
+                scene.image.delete(save=False)
+            if scene.video:
+                scene.video.delete(save=False)
+            if scene.audio:
+                scene.audio.delete(save=False)
+            if scene.subtitle_file:
+                scene.subtitle_file.delete(save=False)
+
+        # 프로젝트 파일들 삭제
+        if self.final_video:
+            self.final_video.delete(save=False)
+        if self.thumbnail:
+            self.thumbnail.delete(save=False)
+        if self.full_subtitles:
+            self.full_subtitles.delete(save=False)
+
+        # temp_clips 삭제 (영상 편집 임시 파일)
+        temp_clips_dir = Path(settings.MEDIA_ROOT) / 'temp_clips'
+        if temp_clips_dir.exists():
+            for clip_file in temp_clips_dir.glob(f'{self.pk}_*.mp4'):
+                try:
+                    clip_file.unlink()
+                except Exception:
+                    pass
+
+        super().delete(*args, **kwargs)
 
     def get_current_step(self) -> int:
         """현재 완료된 단계 번호 반환"""
@@ -179,6 +217,10 @@ class Research(models.Model):
     # 기사별 요약 (검색 결과 전체 보존)
     # [{"query": "검색어", "summary": "요약 내용", "sources": [...]}]
     article_summaries = models.JSONField(default=list, verbose_name="기사별 요약")
+
+    # 수동 추가 자료 (리서치 없이 대본 작성용)
+    manual_notes = models.TextField(blank=True, verbose_name="수동 추가 자료",
+        help_text="직접 입력한 참고 자료. 대본 작성 시 활용됨.")
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -471,7 +513,10 @@ class UploadInfo(models.Model):
 
     def get_full_description(self) -> str:
         """타임라인과 태그가 포함된 전체 설명 생성"""
-        parts = [self.description]
+        # 면책 조항 (투자 경고문)
+        disclaimer = "⚠️ 본 영상은 개인적인 의견이며 투자 권유가 아닙니다. 투자에 대한 책임은 본인에게 있습니다.\n\n"
+
+        parts = [disclaimer + self.description]
 
         # 타임라인 추가
         if self.timeline:
@@ -512,10 +557,12 @@ class StepExecution(models.Model):
 
     # 모델 선택 (단계별로 다르게 지정 가능)
     MODEL_CHOICES = [
+        ('2.5-flash', 'Gemini 2.5 Flash'),
+        ('2.5-pro', 'Gemini 2.5 Pro'),
         ('flash', 'Gemini 3 Flash'),
         ('pro', 'Gemini 3 Pro'),
     ]
-    model_type = models.CharField(max_length=20, choices=MODEL_CHOICES, default='flash', verbose_name="모델")
+    model_type = models.CharField(max_length=20, choices=MODEL_CHOICES, default='2.5-flash', verbose_name="모델")
 
     # 실행 로그 (실시간 확인용)
     logs = models.JSONField(default=list, verbose_name="실행 로그")
@@ -531,6 +578,9 @@ class StepExecution(models.Model):
 
     # 에러
     error_message = models.TextField(blank=True, verbose_name="에러 메시지")
+
+    # 완료 확인 (사용자가 "확인" 눌렀는지)
+    acknowledged = models.BooleanField(default=False, verbose_name="확인됨")
 
     # 시간 기록
     started_at = models.DateTimeField(null=True, blank=True)
@@ -596,3 +646,114 @@ class StepExecution(models.Model):
         self.error_message = error_message
         self.progress_message = f'실패: {error_message[:100]}'
         self.save()
+
+
+class TTSJob(models.Model):
+    """TTS 작업 큐 - DB 기반 작업 관리"""
+    STATUS_CHOICES = [
+        ('pending', '대기'),
+        ('processing', '처리 중'),
+        ('completed', '완료'),
+        ('cancelled', '취소'),
+        ('failed', '실패'),
+    ]
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tts_jobs')
+    scene = models.ForeignKey(Scene, on_delete=models.CASCADE, related_name='tts_jobs')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    # 시간 기록
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # 에러 & 재시도
+    error_message = models.TextField(blank=True)
+    retry_count = models.IntegerField(default=0)
+
+    class Meta:
+        verbose_name = "TTS 작업"
+        verbose_name_plural = "TTS 작업"
+        ordering = ['created_at', 'scene__scene_number']
+
+    def __str__(self):
+        return f"TTS #{self.id} - 프로젝트 {self.project_id} 씬 {self.scene.scene_number} ({self.status})"
+
+    @classmethod
+    def create_jobs_for_project(cls, project):
+        """프로젝트의 모든 씬에 대해 TTS 작업 생성 (이미 오디오 있는 씬 제외)"""
+        # 이미 pending/processing 작업이 있으면 중복 방지
+        existing = cls.objects.filter(
+            project=project,
+            status__in=['pending', 'processing']
+        ).exists()
+        if existing:
+            return 0, "이미 진행 중인 TTS 작업이 있습니다."
+
+        # 오디오 없는 씬만 대상
+        scenes = project.scenes.filter(
+            models.Q(audio='') | models.Q(audio__isnull=True)
+        ).exclude(
+            models.Q(narration='') & models.Q(narration_tts='')
+        ).order_by('scene_number')
+
+        jobs = []
+        for scene in scenes:
+            jobs.append(cls(project=project, scene=scene, status='pending'))
+
+        if jobs:
+            cls.objects.bulk_create(jobs)
+
+        return len(jobs), f"{len(jobs)}개 TTS 작업 생성됨"
+
+    @classmethod
+    def cancel_project_jobs(cls, project):
+        """프로젝트의 pending 작업 모두 취소"""
+        count = cls.objects.filter(
+            project=project,
+            status='pending'
+        ).update(status='cancelled')
+        return count
+
+    @classmethod
+    def get_next_job(cls):
+        """다음 처리할 작업 가져오기 (atomic)"""
+        from django.db import transaction
+
+        with transaction.atomic():
+            job = cls.objects.select_for_update(skip_locked=True).filter(
+                status='pending'
+            ).first()
+
+            if job:
+                job.status = 'processing'
+                job.started_at = timezone.now()
+                job.save(update_fields=['status', 'started_at'])
+
+            return job
+
+    @classmethod
+    def recover_stuck_jobs(cls, timeout_minutes=10):
+        """stuck된 processing 작업 복구"""
+        from datetime import timedelta
+
+        cutoff = timezone.now() - timedelta(minutes=timeout_minutes)
+        count = cls.objects.filter(
+            status='processing',
+            started_at__lt=cutoff
+        ).update(status='pending', started_at=None)
+        return count
+
+    def mark_completed(self):
+        """완료 처리"""
+        self.status = 'completed'
+        self.completed_at = timezone.now()
+        self.save(update_fields=['status', 'completed_at'])
+
+    def mark_failed(self, error_message: str):
+        """실패 처리"""
+        self.status = 'failed'
+        self.completed_at = timezone.now()
+        self.error_message = error_message
+        self.retry_count += 1
+        self.save(update_fields=['status', 'completed_at', 'error_message', 'retry_count'])

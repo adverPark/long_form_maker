@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.conf import settings
 from django.core.files.base import ContentFile
 from .base import BaseStepService
+from apps.pipeline.models import Scene
 
 
 class TTSGeneratorService(BaseStepService):
@@ -20,7 +21,7 @@ class TTSGeneratorService(BaseStepService):
     """
 
     agent_name = 'tts_generator'
-    BATCH_SIZE = 5  # 병렬 처리 배치 크기 (서버 부하 고려)
+    BATCH_SIZE = 2  # 병렬 처리 배치 크기 (GPU 경합 감소)
     REQUEST_TIMEOUT = 180  # 요청 타임아웃 (초)
 
     def _thread_log(self, message, log_type='info'):
@@ -30,6 +31,35 @@ class TTSGeneratorService(BaseStepService):
                 self.log(message, log_type)
         else:
             self.log(message, log_type)
+
+    def _preprocess_for_tts(self, text: str) -> str:
+        """TTS용 텍스트 전처리 - Fish Speech가 처리 못하는 특수문자 제거/변환
+
+        Args:
+            text: 원본 텍스트
+
+        Returns:
+            전처리된 텍스트
+        """
+        if not text:
+            return text
+
+        # 1. 모든 종류의 따옴표 제거 (유니코드 카테고리 기반)
+        # 작은따옴표 류: U+0027('), U+2018('), U+2019('), U+201A(‚), U+201B(‛)
+        # 큰따옴표 류: U+0022("), U+201C("), U+201D("), U+201E(„), U+201F(‟)
+        quote_chars = "'\u2018\u2019\u201a\u201b\"\u201c\u201d\u201e\u201f"
+        for char in quote_chars:
+            text = text.replace(char, "")
+
+        # 2. 기타 특수문자 정리
+        # 말줄임표 정규화
+        text = re.sub(r'…+', '...', text)
+        text = re.sub(r'\.{4,}', '...', text)
+
+        # 3. 연속 공백 제거
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        return text
 
     def _parse_srt_timings(self, srt_content: str) -> list:
         """SRT에서 타이밍과 텍스트 추출
@@ -156,6 +186,14 @@ class TTSGeneratorService(BaseStepService):
             tts_text = scene.narration_tts or scene.narration
             original_narration = scene.narration  # 자막용 원본 (숫자 포함)
 
+            # TTS용 텍스트 전처리 (특수문자 제거)
+            original_tts_text = tts_text
+            tts_text = self._preprocess_for_tts(tts_text)
+
+            # 전처리 로그
+            if original_tts_text != tts_text:
+                self.log(f'씬 {scene.scene_number} 텍스트 전처리: "{original_tts_text[:30]}..." → "{tts_text[:30]}..."')
+
             if not tts_text:
                 self.log(f'씬 {scene.scene_number} 건너뜀 - 나레이션 없음', 'warning')
                 skip_count += 1
@@ -172,10 +210,14 @@ class TTSGeneratorService(BaseStepService):
 
         # 배치 병렬 처리
         success_count = 0
+        error_count = 0
         warning_count = 0
         processed = 0
 
         for batch_start in range(0, len(scenes_to_process), self.BATCH_SIZE):
+            # 매 배치 시작 전 취소 체크
+            self.raise_if_cancelled()
+
             batch = scenes_to_process[batch_start:batch_start + self.BATCH_SIZE]
             batch_nums = [s[0].scene_number for s in batch]
             self.log(f'배치 처리 중: 씬 {batch_nums}')
@@ -241,7 +283,6 @@ class TTSGeneratorService(BaseStepService):
                                         ContentFile(mapped_srt.encode('utf-8')),
                                         save=False
                                     )
-                                    self.log(f'씬 {scene_num} 저장 완료 (+자막 매핑)')
                                 else:
                                     # 타이밍 추출 실패 시 원본 저장
                                     srt_filename = f'scene_{scene_num:02d}.srt'
@@ -250,28 +291,51 @@ class TTSGeneratorService(BaseStepService):
                                     self._thread_log(f'씬 {scene_num}: SRT 파싱 실패 (timings={len(srt_timings)}, narration={bool(original_narration)})', 'warning')
                             else:
                                 scene.subtitle_status = 'none'
-                                self.log(f'씬 {scene_num} 저장 완료 (자막 없음)', 'warning')
 
-                            scene.save()
+                            # DB 저장 - UPDATE로 해당 필드만 업데이트 (unique constraint 회피)
+                            update_fields = {
+                                'audio': scene.audio.name if scene.audio else '',
+                                'audio_duration': scene.audio_duration,
+                                'subtitle_file': scene.subtitle_file.name if scene.subtitle_file else '',
+                                'subtitle_word_count': scene.subtitle_word_count,
+                                'narration_word_count': scene.narration_word_count,
+                                'subtitle_status': scene.subtitle_status,
+                            }
+                            Scene.objects.filter(pk=scene.pk).update(**update_fields)
+                            with self._lock:
+                                self.log(f'씬 {scene_num} 저장 완료')
                             success_count += 1
                         else:
                             self.log(f'씬 {scene_num} 생성 실패', 'error')
+                            error_count += 1
                     except Exception as e:
                         self.log(f'씬 {scene_num} 오류: {str(e)[:50]}', 'error')
+                        error_count += 1
 
                     progress = 5 + int((processed / len(scenes_to_process)) * 90)
                     self.update_progress(progress, f'{processed}/{len(scenes_to_process)} TTS 생성 중...')
 
-        # 완료
+        # 완료 처리
         self.log(f'TTS 생성 완료', 'result', {
             'total': total,
             'success': success_count,
+            'errors': error_count,
             'skipped': skip_count,
             'warnings': warning_count,
         })
 
-        # 경고가 있으면 메시지에 표시
-        if warning_count > 0:
+        # 실패 처리 - 에러가 성공보다 많거나 모두 실패한 경우
+        scenes_attempted = len(scenes_to_process)
+        if scenes_attempted > 0:
+            if success_count == 0:
+                raise ValueError(f'TTS 생성 실패: {scenes_attempted}개 씬 시도했으나 모두 실패')
+            elif error_count > success_count:
+                raise ValueError(f'TTS 생성 실패: {scenes_attempted}개 중 {error_count}개 실패 (성공: {success_count}개)')
+
+        # 에러 또는 경고가 있으면 메시지에 표시
+        if error_count > 0:
+            self.update_progress(100, f'완료: {success_count}개 생성, ⚠️ {error_count}개 실패')
+        elif warning_count > 0:
             self.update_progress(100, f'완료: {success_count}개 생성, ⚠️ {warning_count}개 단어 불일치')
         else:
             self.update_progress(100, f'완료: {success_count}개 생성, {skip_count}개 스킵')

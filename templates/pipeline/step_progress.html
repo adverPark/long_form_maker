@@ -70,7 +70,10 @@
                         {% elif execution.step.name == 'scene_generator' %}
                             {{ project.image_model|default:'gemini-3-pro' }}
                         {% else %}
-                            {% if execution.model_type == 'pro' %}Gemini 3 Pro{% else %}Gemini 3 Flash{% endif %}
+                            {% if execution.model_type == '2.5-flash' %}Gemini 2.5 Flash
+                            {% elif execution.model_type == '2.5-pro' %}Gemini 2.5 Pro
+                            {% elif execution.model_type == 'pro' %}Gemini 3 Pro
+                            {% else %}Gemini 3 Flash{% endif %}
                         {% endif %}
                     </span>
                 </div>

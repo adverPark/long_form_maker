@@ -1,5 +1,8 @@
+import logging
 import threading
 from django.shortcuts import render, redirect, get_object_or_404
+
+logger = logging.getLogger(__name__)
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.conf import settings
@@ -13,15 +16,54 @@ from .services import get_service_class
 from apps.accounts.models import APIKey
 
 
+def _cleanup_stale_executions(user=None):
+    """오래된 running 상태 실행을 failed로 변경 (스레드 죽은 경우 대비)"""
+    from django.utils import timezone
+    from datetime import timedelta
+
+    # 30분 이상 실행 중인 작업 정리 (로그 시간은 타임존 이슈로 사용 안함)
+    stale_threshold = timezone.now() - timedelta(minutes=30)
+
+    query = StepExecution.objects.filter(status='running', created_at__lt=stale_threshold)
+    if user:
+        query = query.filter(project__user=user)
+
+    for exec in query:
+        exec.status = 'failed'
+        exec.error_message = '30분 이상 실행 중 - 서버 재시작 또는 스레드 종료로 인해 중단됨'
+        exec.save()
+
+
 @login_required
 def dashboard(request):
     """대시보드 - 프로젝트 목록"""
+    # stale 상태 정리 (스레드 죽은 running 실행들)
+    _cleanup_stale_executions(user=request.user)
+
     projects = Project.objects.filter(user=request.user).prefetch_related(
         'step_executions__step'
     )
 
+    # 진행 중 + 실패 + 완료(미확인) 작업 목록
+    running_executions = []
+    seen_keys = set()
+    for exec in StepExecution.objects.filter(
+        project__user=request.user
+    ).select_related('project', 'step').order_by('-created_at')[:50]:
+        key = (exec.project_id, exec.step_id)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            # running, failed는 항상 표시 / completed는 acknowledged=False일 때만
+            if exec.status in ['running', 'failed']:
+                running_executions.append(exec)
+            elif exec.status == 'completed' and not exec.acknowledged:
+                running_executions.append(exec)
+        if len(running_executions) >= 10:
+            break
+
     context = {
         'projects': projects,
+        'running_executions': running_executions,
     }
     return render(request, 'pipeline/dashboard.html', context)
 
@@ -55,12 +97,20 @@ def step_execute(request, pk, step_name):
     step = get_object_or_404(PipelineStep, name=step_name)
 
     if request.method == 'POST':
-        # 이전 running 상태 실행들 취소 처리 (중복 방지)
-        project.step_executions.filter(step=step, status='running').update(
-            status='cancelled', progress_message='새 실행으로 대체됨'
-        )
+        # 이미 실행 중인 작업이 있으면 차단
+        running_exec = project.step_executions.filter(step=step, status='running').first()
+        if running_exec:
+            message = f'{step.display_name}이(가) 이미 실행 중입니다. 취소 후 다시 시도해주세요.'
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': False,
+                    'message': message,
+                    'execution_id': running_exec.pk,
+                })
+            messages.warning(request, message)
+            return redirect('pipeline:step_progress', pk=project.pk, execution_id=running_exec.pk)
 
-        # 이전 실행에서 토큰 가져오기 (이어서 실행 시 누적)
+        # 이전 실행에서 토큰 가져오기 (누적)
         prev_execution = project.step_executions.filter(step=step).order_by('-created_at').first()
         prev_tokens = {
             'input_tokens': prev_execution.input_tokens if prev_execution else 0,
@@ -69,7 +119,7 @@ def step_execute(request, pk, step_name):
             'estimated_cost': prev_execution.estimated_cost if prev_execution else 0,
         }
 
-        # 실행 생성 (이전 토큰 이어받기)
+        # 실행 생성 (이전 토큰 누적)
         execution = StepExecution.objects.create(
             project=project,
             step=step,
@@ -81,11 +131,12 @@ def step_execute(request, pk, step_name):
 
         # 수동 입력 처리
         manual_input = request.POST.get('manual_input', '').strip()
-        model_type = request.POST.get('model_type', 'flash')
+        model_type = request.POST.get('model_type', '2.5-flash')
+        valid_models = ['2.5-flash', '2.5-pro', 'flash', 'pro']
 
-        if manual_input or model_type != 'flash':
+        if manual_input or model_type != '2.5-flash':
             execution.manual_input = manual_input
-            execution.model_type = model_type if model_type in ['flash', 'pro'] else 'flash'
+            execution.model_type = model_type if model_type in valid_models else '2.5-flash'
             execution.save()
 
         # 이미지 프롬프트 옵션: 한글금지 체크 시 텍스트 없는 프롬프트 생성
@@ -94,6 +145,16 @@ def step_execute(request, pk, step_name):
             if no_text:
                 execution.intermediate_data = {'no_text': True}
                 execution.save()
+
+        # 인트로 영상 옵션: 씬 개수 선택
+        if step_name == 'video_generator':
+            scene_count = request.POST.get('scene_count', '4')
+            try:
+                scene_count = int(scene_count)
+            except ValueError:
+                scene_count = 4
+            execution.intermediate_data = {'scene_count': scene_count}
+            execution.save()
 
         # 서비스 실행
         service_class = get_service_class(step.name)
@@ -109,9 +170,20 @@ def step_execute(request, pk, step_name):
                     messages.error(request, f'저장 실패: {execution.error_message[:100]}')
                 return redirect('pipeline:project_data', pk=project.pk)
 
-            # 나머지는 비동기 실행 (시간이 걸림) - 진행률 페이지로 이동
+            # 나머지는 비동기 실행 (시간이 걸림)
             thread = threading.Thread(target=service.run)
             thread.start()
+
+            # AJAX 요청이면 JSON 응답
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({
+                    'success': True,
+                    'message': f'{step.display_name} 실행이 시작되었습니다.',
+                    'execution_id': execution.pk,
+                    'step_name': step.display_name,
+                })
+
+            # 일반 요청이면 진행률 페이지로 이동
             messages.info(request, f'{step.display_name} 실행이 시작되었습니다.')
             return redirect('pipeline:step_progress', pk=project.pk, execution_id=execution.pk)
         else:
@@ -175,6 +247,35 @@ def step_cancel(request, pk, execution_id):
 
 @login_required
 @require_POST
+def step_delete(request, pk, execution_id):
+    """실행 기록 삭제 (running 제외)"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    execution = get_object_or_404(StepExecution, pk=execution_id, project=project)
+
+    if execution.status == 'running':
+        return JsonResponse({'success': False, 'message': '실행 중인 작업은 삭제할 수 없습니다.'})
+
+    execution.delete()
+    return JsonResponse({'success': True, 'message': '삭제되었습니다.'})
+
+
+@login_required
+@require_POST
+def step_acknowledge(request, pk, execution_id):
+    """완료된 작업 확인 처리 (목록에서 숨김)"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    execution = get_object_or_404(StepExecution, pk=execution_id, project=project)
+
+    if execution.status == 'completed':
+        execution.acknowledged = True
+        execution.save()
+        return JsonResponse({'success': True, 'message': '확인되었습니다.'})
+
+    return JsonResponse({'success': False, 'message': '완료된 작업만 확인할 수 있습니다.'})
+
+
+@login_required
+@require_POST
 def step_execute_parallel(request, pk):
     """여러 단계 병렬 실행 (TTS + 이미지 동시)"""
     project = get_object_or_404(Project, pk=pk, user=request.user)
@@ -197,7 +298,7 @@ def step_execute_parallel(request, pk):
             status='cancelled', progress_message='새 실행으로 대체됨'
         )
 
-        # 이전 토큰 정보 가져오기
+        # 이전 토큰 정보 가져오기 (누적)
         prev_execution = project.step_executions.filter(step=step).order_by('-created_at').first()
         prev_tokens = {
             'input_tokens': prev_execution.input_tokens if prev_execution else 0,
@@ -206,7 +307,7 @@ def step_execute_parallel(request, pk):
             'estimated_cost': prev_execution.estimated_cost if prev_execution else 0,
         }
 
-        # 실행 생성
+        # 실행 생성 (이전 토큰 누적)
         execution = StepExecution.objects.create(
             project=project,
             step=step,
@@ -227,10 +328,24 @@ def step_execute_parallel(request, pk):
 
     if executions:
         step_names_display = ', '.join([e.step.display_name for e in executions])
-        messages.info(request, f'{step_names_display} 실행이 시작되었습니다.')
-        # 첫 번째 실행의 진행률 페이지로 이동 (또는 project_data로)
+        message = f'{step_names_display} 실행이 시작되었습니다.'
+
+        # AJAX 요청이면 JSON 응답
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': True,
+                'message': message,
+                'execution_ids': [e.pk for e in executions],
+            })
+
+        messages.info(request, message)
         return redirect('pipeline:project_data', pk=project.pk)
     else:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({
+                'success': False,
+                'message': '실행할 단계를 찾을 수 없습니다.',
+            })
         messages.error(request, '실행할 단계를 찾을 수 없습니다.')
         return redirect('pipeline:project_data', pk=project.pk)
 
@@ -256,6 +371,14 @@ def auto_pipeline(request, pk):
         messages.error(request, '주제를 먼저 입력해주세요.')
         return redirect('pipeline:project_data', pk=project.pk)
 
+    # 모델 선택 가져오기
+    model_settings = {
+        'researcher': request.POST.get('model_researcher', '2.5-flash'),
+        'script_writer': request.POST.get('model_script_writer', '2.5-pro'),
+        'scene_planner': request.POST.get('model_scene_planner', '2.5-flash'),
+        'image_prompter': request.POST.get('model_image_prompter', '2.5-flash'),
+    }
+
     # auto_pipeline 스텝 생성 (없으면)
     step, _ = PipelineStep.objects.get_or_create(
         name='auto_pipeline',
@@ -275,11 +398,12 @@ def auto_pipeline(request, pk):
     execution = StepExecution.objects.create(
         project=project,
         step=step,
-        model_type=request.POST.get('model_type', 'pro'),
+        model_type=request.POST.get('model_type', '2.5-pro'),
         input_tokens=prev_tokens['input_tokens'],
         output_tokens=prev_tokens['output_tokens'],
         total_tokens=prev_tokens['total_tokens'],
         estimated_cost=prev_tokens['estimated_cost'],
+        intermediate_data={'model_settings': model_settings},
     )
 
     # 백그라운드 실행
@@ -296,21 +420,28 @@ def project_data(request, pk):
     """프로젝트 데이터 보기 (Topic, Research, Draft, Scenes)"""
     from decimal import Decimal
 
+    # stale 상태 정리 (스레드 죽은 running 실행들)
+    _cleanup_stale_executions(user=request.user)
+
     project = get_object_or_404(
         Project.objects.select_related('topic', 'research', 'draft'),
         pk=pk,
         user=request.user
     )
 
-    # 실행 중인 작업들 확인 (템플릿에서 배너로 표시) - 스텝당 최신 1개만
+    # 실행 중 + 실패 + 완료(미확인) 작업들 (스텝별 최신만)
     running_executions = []
     seen_steps = set()
-    for exec in project.step_executions.filter(status='running').select_related('step').order_by('-created_at'):
+    for exec in project.step_executions.select_related('step').order_by('-created_at'):
         if exec.step_id not in seen_steps:
-            running_executions.append(exec)
             seen_steps.add(exec.step_id)
+            # running, failed는 항상 표시 / completed는 acknowledged=False일 때만
+            if exec.status in ['running', 'failed']:
+                running_executions.append(exec)
+            elif exec.status == 'completed' and not exec.acknowledged:
+                running_executions.append(exec)
 
-    # 각 단계별 최근 실행 가져오기
+    # 각 단계별 최근 실행 가져오기 (누적값 포함)
     steps = PipelineStep.objects.all()
     step_executions = {}
     total_tokens = 0
@@ -320,8 +451,10 @@ def project_data(request, pk):
         execution = project.step_executions.filter(step=step).order_by('-created_at').first()
         step_executions[step.name] = execution
         if execution:
-            total_tokens += execution.total_tokens or 0
-            total_cost += execution.estimated_cost or Decimal('0')
+            # auto_pipeline은 하위 스텝 토큰을 복사한 것이므로 총계에서 제외 (중복 방지)
+            if step.name != 'auto_pipeline':
+                total_tokens += execution.total_tokens or 0
+                total_cost += execution.estimated_cost or Decimal('0')
 
     # 썸네일 스타일 목록 (업로드 정보에서 선택용)
     thumbnail_styles = ThumbnailStylePreset.objects.filter(user=request.user)
@@ -371,11 +504,39 @@ def draft_update(request, pk):
 
 @login_required
 @require_POST
+def research_manual_notes(request, pk):
+    """리서치 수동 자료 저장 API"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+
+    manual_notes = request.POST.get('manual_notes', '').strip()
+    topic = request.POST.get('topic', '').strip()
+
+    # Research가 없으면 생성
+    research, created = Research.objects.get_or_create(project=project)
+    research.manual_notes = manual_notes
+    if topic:
+        research.topic = topic
+    research.save()
+
+    return JsonResponse({
+        'success': True,
+        'message': '수동 자료가 저장되었습니다.',
+        'char_count': len(manual_notes),
+    })
+
+
+@login_required
+@require_POST
 def project_delete(request, pk):
-    """프로젝트 삭제"""
+    """프로젝트 삭제 (파일 포함)"""
     project = get_object_or_404(Project, pk=pk, user=request.user)
     name = project.name
-    project.delete()
+    project.delete()  # 모델의 delete()에서 파일도 삭제
+
+    # AJAX 요청이면 JSON 응답
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.content_type == 'application/json':
+        return JsonResponse({'success': True, 'message': f'프로젝트 "{name}"가 삭제되었습니다.'})
+
     messages.success(request, f'프로젝트 "{name}"가 삭제되었습니다.')
     return redirect('pipeline:dashboard')
 
@@ -441,91 +602,156 @@ image_settings = project_settings
 @login_required
 @require_POST
 def scene_generate_image(request, pk, scene_number):
-    """개별 씬 이미지 생성"""
+    """개별 씬 이미지 생성 (Gemini / Replicate 지원)"""
     import io
+    import requests as http_requests
     from PIL import Image
     from google import genai
     from google.genai import types
     from django.core.files.base import ContentFile
     from apps.accounts.models import APIKey
+    import replicate
 
     project = get_object_or_404(Project, pk=pk, user=request.user)
     scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
 
-    # 프로젝트 설정에서 이미지 모델 가져오기
-    from apps.pipeline.services.base import IMAGE_MODELS
-    model_key = getattr(project, 'image_model', 'gemini-3-pro')
-    api_model = IMAGE_MODELS.get(model_key, 'gemini-3-pro-image-preview')
+    # POST에서 모델 타입 가져오기
+    model_type = request.POST.get('model_type', 'pro')
 
-    # Gemini API 키 가져오기
-    api_key = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
-    if not api_key:
-        return JsonResponse({'success': False, 'message': 'Gemini API 키가 없습니다.'})
+    # 모델 설정 매핑
+    MODEL_CONFIG = {
+        'pro': {'provider': 'gemini', 'api_model': 'gemini-3-pro-image-preview'},
+        'flash': {'provider': 'gemini', 'api_model': 'gemini-2.5-flash-image'},
+        'flux': {'provider': 'replicate', 'api_model': 'black-forest-labs/flux-schnell'},
+        'sdxl': {'provider': 'replicate', 'api_model': 'stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc'},
+    }
+
+    config = MODEL_CONFIG.get(model_type, MODEL_CONFIG['pro'])
+    provider = config['provider']
+    api_model = config['api_model']
+
+    # 프롬프트 구성 - 상황 묘사에 집중 (캐릭터/스타일은 이미지로 제공)
+    base_prompt = scene.image_prompt or scene.narration or ''
+    style = project.image_style
+    character = project.character
 
     try:
-        client = genai.Client(api_key=api_key.get_key())
+        if provider == 'gemini':
+            # Gemini API
+            api_key = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+            if not api_key:
+                return JsonResponse({'success': False, 'message': 'Gemini API 키가 없습니다.'})
 
-        # 프롬프트 구성 - 이미지 생성 명시
-        base_prompt = scene.image_prompt or scene.narration or ''
+            client = genai.Client(api_key=api_key.get_key())
 
-        # 스타일 프리셋 적용
-        style = project.image_style
-        if style:
-            base_prompt = f"{base_prompt}\n\nStyle: {style.style_prompt}"
+            prompt = f"Generate an image based on this description:\n\n{base_prompt}\n\nAspect ratio: 16:9 (1920x1080), professional quality."
+            contents = [prompt]
 
-        prompt = f"Generate an image based on this description:\n\n{base_prompt}\n\nAspect ratio: 16:9 (1920x1080), professional quality, photorealistic."
+            # 스타일 샘플 이미지 추가
+            style_added = 0
+            if style:
+                for sample in style.sample_images.all()[:3]:
+                    try:
+                        img = Image.open(sample.image.path)
+                        contents.append(img)
+                        style_added += 1
+                    except:
+                        pass
+                if style_added > 0:
+                    style_desc = style.style_prompt if style.style_prompt else "the reference images"
+                    contents[0] = f"Use the reference images for background and artistic style. Style: {style_desc}\n\n{contents[0]}"
 
-        # 컨텐츠 구성
-        contents = [prompt]
-
-        # 스타일 샘플 이미지 추가
-        if style:
-            for sample in style.sample_images.all()[:3]:
+            # 캐릭터 이미지 추가
+            if scene.has_character and character and character.image:
                 try:
-                    img = Image.open(sample.image.path)
-                    contents.append(img)
+                    char_img = Image.open(character.image.path)
+                    contents.append(char_img)
+                    contents[0] = f"Include the character from the reference image.\n\n{contents[0]}"
                 except:
                     pass
 
-        # 캐릭터 씬이면 캐릭터 이미지 추가
-        character = project.character
-        if scene.has_character and character and character.image:
-            try:
-                char_img = Image.open(character.image.path)
-                contents.append(char_img)
-                contents[0] = f"Include the character from reference image. Character: {character.character_prompt}\n\n{contents[0]}"
-            except:
-                pass
-
-        # Gemini 호출
-        response = client.models.generate_content(
-            model=api_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_modalities=['IMAGE', 'TEXT'],
+            response = client.models.generate_content(
+                model=api_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=['IMAGE', 'TEXT'],
+                )
             )
-        )
 
-        # 이미지 추출
-        if hasattr(response, 'candidates') and response.candidates:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    image_data = part.inline_data.data
-                    img = Image.open(io.BytesIO(image_data))
-                    img = img.resize((1920, 1080), Image.Resampling.LANCZOS)
+            if hasattr(response, 'candidates') and response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        image_data = part.inline_data.data
+                        img = Image.open(io.BytesIO(image_data))
+                        img = img.resize((1920, 1080), Image.Resampling.LANCZOS)
 
-                    output = io.BytesIO()
-                    img.save(output, format='PNG')
+                        output = io.BytesIO()
+                        img.save(output, format='PNG')
 
-                    filename = f'scene_{scene_number:02d}.png'
-                    scene.image.save(filename, ContentFile(output.getvalue()), save=True)
+                        filename = f'scene_{scene_number:02d}.png'
+                        scene.image.save(filename, ContentFile(output.getvalue()), save=True)
 
-                    return JsonResponse({
-                        'success': True,
-                        'image_url': scene.image.url
-                    })
+                        return JsonResponse({'success': True, 'image_url': scene.image.url})
 
-        return JsonResponse({'success': False, 'message': '이미지 생성 실패'})
+            return JsonResponse({'success': False, 'message': '이미지 생성 실패'})
+
+        else:
+            # Replicate API
+            api_key = APIKey.objects.filter(user=request.user, service='replicate', is_default=True).first()
+            if not api_key:
+                api_key = APIKey.objects.filter(user=request.user, service='replicate').first()
+            if not api_key:
+                return JsonResponse({'success': False, 'message': 'Replicate API 키가 없습니다.'})
+
+            prompt = f"{base_prompt}, 16:9 aspect ratio, professional quality, photorealistic"
+            client = replicate.Client(api_token=api_key.get_key())
+
+            if 'flux-schnell' in api_model:
+                output = client.run(
+                    api_model,
+                    input={
+                        "prompt": prompt,
+                        "num_outputs": 1,
+                        "aspect_ratio": "16:9",
+                        "output_format": "png",
+                        "output_quality": 90,
+                    }
+                )
+            elif 'sdxl' in api_model:
+                output = client.run(
+                    api_model,
+                    input={
+                        "prompt": prompt,
+                        "width": 1344,
+                        "height": 768,
+                        "num_outputs": 1,
+                        "scheduler": "K_EULER",
+                        "num_inference_steps": 25,
+                    }
+                )
+            else:
+                output = client.run(api_model, input={"prompt": prompt, "num_outputs": 1})
+
+            if output:
+                image_url = output[0] if isinstance(output, list) else output
+                if hasattr(image_url, 'url'):
+                    image_url = image_url.url
+
+                response = http_requests.get(str(image_url), timeout=30)
+                response.raise_for_status()
+
+                img = Image.open(io.BytesIO(response.content))
+                img = img.resize((1920, 1080), Image.Resampling.LANCZOS)
+
+                output_buffer = io.BytesIO()
+                img.save(output_buffer, format='PNG')
+
+                filename = f'scene_{scene_number:02d}.png'
+                scene.image.save(filename, ContentFile(output_buffer.getvalue()), save=True)
+
+                return JsonResponse({'success': True, 'image_url': scene.image.url})
+
+            return JsonResponse({'success': False, 'message': 'Replicate 응답 없음'})
 
     except Exception as e:
         return JsonResponse({'success': False, 'message': str(e)[:100]})
@@ -550,6 +776,13 @@ def scene_generate_tts(request, pk, scene_number):
     original_narration = scene.narration  # 자막용 원본
     if not text:
         return JsonResponse({'success': False, 'message': '나레이션이 없습니다.'})
+
+    # TTS용 텍스트 전처리 (Fish Speech가 처리 못하는 특수문자 제거)
+    quote_chars = "'\u2018\u2019\u201a\u201b\"\u201c\u201d\u201e\u201f"
+    for char in quote_chars:
+        text = text.replace(char, "")
+    text = re.sub(r'…+', '...', text)
+    text = re.sub(r'\s+', ' ', text).strip()
 
     # 음성 프리셋
     voice = project.voice
@@ -951,16 +1184,20 @@ def generate_upload_info(request, pk):
         })
 
     # 모델 선택
-    model_type = request.POST.get('model_type', 'flash')
+    model_type = request.POST.get('model_type', '2.5-flash')
     MODELS = {
+        '2.5-flash': 'gemini-2.5-flash',
+        '2.5-pro': 'gemini-2.5-pro',
         'flash': 'gemini-3-flash-preview',
         'pro': 'gemini-3-pro-preview',
     }
     PRICING = {
+        'gemini-2.5-flash': {'input': Decimal('0.30'), 'output': Decimal('2.50')},
+        'gemini-2.5-pro': {'input': Decimal('1.25'), 'output': Decimal('10.00')},
         'gemini-3-flash-preview': {'input': Decimal('0.50'), 'output': Decimal('3.00')},
         'gemini-3-pro-preview': {'input': Decimal('2.00'), 'output': Decimal('12.00')},
     }
-    model_name = MODELS.get(model_type, MODELS['flash'])
+    model_name = MODELS.get(model_type, MODELS['2.5-flash'])
 
     # UploadInfo 가져오거나 생성
     info, created = UploadInfo.objects.get_or_create(
@@ -1237,6 +1474,7 @@ Korean text must be clearly readable with bold font and high contrast."""
                 pass
 
         # Gemini 호출
+        logger.info(f'[Thumbnail] Project {pk}: Gemini 이미지 생성 시작, model=gemini-3-pro-image-preview')
         response = client.models.generate_content(
             model='gemini-3-pro-image-preview',
             contents=contents,
@@ -1244,12 +1482,15 @@ Korean text must be clearly readable with bold font and high contrast."""
                 response_modalities=['IMAGE', 'TEXT'],
             )
         )
+        logger.info(f'[Thumbnail] Project {pk}: Gemini 응답 수신')
 
         # 이미지 추출
         if hasattr(response, 'candidates') and response.candidates:
-            for part in response.candidates[0].content.parts:
+            logger.info(f'[Thumbnail] Project {pk}: candidates={len(response.candidates)}, parts={len(response.candidates[0].content.parts)}')
+            for i, part in enumerate(response.candidates[0].content.parts):
                 if hasattr(part, 'inline_data') and part.inline_data:
                     image_data = part.inline_data.data
+                    logger.info(f'[Thumbnail] Project {pk}: 이미지 데이터 발견 (part {i}, size={len(image_data)} bytes)')
                     img = Image.open(io.BytesIO(image_data))
                     img = img.resize((1280, 720), Image.Resampling.LANCZOS)
 
@@ -1257,13 +1498,126 @@ Korean text must be clearly readable with bold font and high contrast."""
                     img.save(output, format='PNG')
 
                     project.thumbnail.save('thumbnail.png', ContentFile(output.getvalue()), save=True)
+                    logger.info(f'[Thumbnail] Project {pk}: 썸네일 저장 완료')
 
                     return JsonResponse({
                         'success': True,
                         'thumbnail_url': project.thumbnail.url,
                     })
+                else:
+                    logger.info(f'[Thumbnail] Project {pk}: part {i} - inline_data 없음, type={type(part)}')
+        else:
+            logger.warning(f'[Thumbnail] Project {pk}: candidates 없음, response={response}')
 
-        return JsonResponse({'success': False, 'message': '썸네일 생성 실패'})
+        return JsonResponse({'success': False, 'message': '썸네일 생성 실패 - 이미지 없음'})
 
     except Exception as e:
-        return JsonResponse({'success': False, 'message': str(e)[:100]})
+        import traceback
+        logger.error(f'[Thumbnail] Project {pk}: 에러 발생 - {type(e).__name__}: {str(e)}')
+        logger.error(f'[Thumbnail] Project {pk}: traceback:\n{traceback.format_exc()}')
+        return JsonResponse({'success': False, 'message': f'{type(e).__name__}: {str(e)[:100]}'})
+
+
+# =============================================
+# 사용자별 프롬프트 관리
+# =============================================
+
+@login_required
+def user_prompt(request, agent_name):
+    """사용자별 프롬프트 조회/저장 API"""
+    from apps.prompts.models import AgentPrompt, UserAgentPrompt
+
+    # 유효한 에이전트인지 확인
+    valid_agents = dict(AgentPrompt.AGENT_CHOICES)
+    if agent_name not in valid_agents:
+        return JsonResponse({'success': False, 'message': f'잘못된 에이전트: {agent_name}'})
+
+    if request.method == 'POST':
+        # 저장
+        content = request.POST.get('content', '').strip()
+        if not content:
+            return JsonResponse({'success': False, 'message': '프롬프트 내용을 입력해주세요.'})
+
+        user_prompt_obj, created = UserAgentPrompt.objects.update_or_create(
+            user=request.user,
+            agent_name=agent_name,
+            defaults={'prompt_content': content}
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': '저장되었습니다.',
+            'created': created,
+        })
+
+    # GET - 조회
+    # 1. 사용자 커스텀 프롬프트
+    try:
+        user_prompt_obj = UserAgentPrompt.objects.get(user=request.user, agent_name=agent_name)
+        return JsonResponse({
+            'success': True,
+            'content': user_prompt_obj.prompt_content,
+            'is_custom': True,
+            'agent_name': agent_name,
+            'display_name': valid_agents[agent_name],
+        })
+    except UserAgentPrompt.DoesNotExist:
+        pass
+
+    # 2. 시스템 기본 프롬프트
+    try:
+        system_prompt = AgentPrompt.objects.get(agent_name=agent_name, is_active=True)
+        return JsonResponse({
+            'success': True,
+            'content': system_prompt.prompt_content,
+            'is_custom': False,
+            'agent_name': agent_name,
+            'display_name': valid_agents[agent_name],
+        })
+    except AgentPrompt.DoesNotExist:
+        pass
+
+    # 3. 서비스 내장 기본 프롬프트
+    default_content = _get_default_prompt(agent_name)
+    return JsonResponse({
+        'success': True,
+        'content': default_content,
+        'is_custom': False,
+        'agent_name': agent_name,
+        'display_name': valid_agents[agent_name],
+    })
+
+
+@login_required
+@require_POST
+def user_prompt_reset(request, agent_name):
+    """사용자 프롬프트 초기화 (기본값으로 복원)"""
+    from apps.prompts.models import UserAgentPrompt
+
+    deleted, _ = UserAgentPrompt.objects.filter(
+        user=request.user,
+        agent_name=agent_name
+    ).delete()
+
+    return JsonResponse({
+        'success': True,
+        'message': '기본 프롬프트로 초기화되었습니다.' if deleted else '커스텀 프롬프트가 없습니다.',
+        'deleted': deleted > 0,
+    })
+
+
+def _get_default_prompt(agent_name: str) -> str:
+    """서비스 내장 기본 프롬프트 가져오기"""
+    if agent_name == 'script_writer':
+        from apps.pipeline.services.script_writer import ScriptWriterService
+        return ScriptWriterService.DEFAULT_PROMPT
+    elif agent_name == 'researcher':
+        from apps.pipeline.services.researcher import RESEARCHER_SYSTEM_PROMPT
+        return RESEARCHER_SYSTEM_PROMPT
+    elif agent_name == 'scene_planner':
+        from apps.pipeline.services.scene_planner import ScenePlannerService
+        return ScenePlannerService.DEFAULT_PROMPT
+    elif agent_name == 'image_prompter':
+        from apps.pipeline.services.image_prompter import ImagePrompterService
+        return getattr(ImagePrompterService, 'DEFAULT_PROMPT', '')
+    return ''

@@ -2,16 +2,28 @@ import time
 import traceback
 from decimal import Decimal
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from django.conf import settings
 from django.db import close_old_connections
 from google import genai
 from google.genai import types
-from apps.prompts.models import AgentPrompt
+from apps.prompts.models import AgentPrompt, UserAgentPrompt
 from apps.accounts.models import APIKey
+
+
+# API 호출 타임아웃 (초)
+API_TIMEOUT = 300  # 5분 (긴 대본 처리용)
+
+
+class CancelledException(Exception):
+    """작업 취소 예외"""
+    pass
 
 
 # 사용 가능한 Gemini 모델
 GEMINI_MODELS = {
+    '2.5-flash': 'gemini-2.5-flash',
+    '2.5-pro': 'gemini-2.5-pro',
     'flash': 'gemini-3-flash-preview',
     'pro': 'gemini-3-pro-preview',
 }
@@ -27,6 +39,16 @@ DEFAULT_MODEL = 'flash'
 
 # Gemini 가격 (USD per 1M tokens)
 GEMINI_PRICING = {
+    # Gemini 2.5 모델
+    'gemini-2.5-flash': {
+        'input': Decimal('0.30'),   # $0.30 / 1M tokens
+        'output': Decimal('2.50'),  # $2.50 / 1M tokens
+    },
+    'gemini-2.5-pro': {
+        'input': Decimal('1.25'),   # $1.25 / 1M tokens (≤200k)
+        'output': Decimal('10.00'), # $10.00 / 1M tokens (≤200k)
+    },
+    # Gemini 3 모델
     'gemini-3-flash-preview': {
         'input': Decimal('0.50'),   # $0.50 / 1M tokens
         'output': Decimal('3.00'),  # $3.00 / 1M tokens
@@ -66,13 +88,29 @@ class BaseStepService(ABC):
         try:
             self.execution.start()
             self.execute()
-            self.execution.complete()
+            # 취소된 경우 complete() 호출하지 않음
+            self.execution.refresh_from_db()
+            if self.execution.status != 'cancelled':
+                self.execution.complete()
+        except CancelledException:
+            # 취소는 정상 종료로 처리
+            self.log('작업이 취소되었습니다.', 'warning')
         except Exception as e:
             error_msg = f"{str(e)}\n{traceback.format_exc()}"
             self.execution.fail(error_msg)
         finally:
             # 스레드에서 실행 시 DB 연결 정리
             close_old_connections()
+
+    def check_cancelled(self) -> bool:
+        """취소 여부 확인 (DB에서 최신 상태 조회)"""
+        self.execution.refresh_from_db()
+        return self.execution.status == 'cancelled'
+
+    def raise_if_cancelled(self):
+        """취소된 경우 예외 발생"""
+        if self.check_cancelled():
+            raise CancelledException('작업이 취소되었습니다.')
 
     @abstractmethod
     def execute(self):
@@ -124,9 +162,22 @@ class BaseStepService(ABC):
             raise ValueError('Replicate API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.')
 
     def get_prompt(self) -> str:
-        """활성화된 프롬프트 가져오기"""
+        """프롬프트 가져오기 (사용자별 > 시스템 기본)"""
         if not self.agent_name:
             return ''
+
+        # 1. 사용자별 커스텀 프롬프트 확인
+        try:
+            user_prompt = UserAgentPrompt.objects.get(
+                user=self.user,
+                agent_name=self.agent_name
+            )
+            self.log(f'사용자 커스텀 프롬프트 사용: {self.agent_name}')
+            return user_prompt.prompt_content
+        except UserAgentPrompt.DoesNotExist:
+            pass
+
+        # 2. 시스템 기본 프롬프트
         try:
             prompt = AgentPrompt.objects.get(agent_name=self.agent_name, is_active=True)
             return prompt.prompt_content
@@ -223,20 +274,30 @@ class BaseStepService(ABC):
         # 로그
         self.log(f'토큰: {input_tokens:,} + {output_tokens:,} = {total_tokens:,} (${float(self.execution.estimated_cost):.4f})')
 
-    def call_gemini(self, prompt: str, model_type: str = None, max_retries: int = 3) -> str:
-        """Gemini API 호출 (재시도 포함)"""
+    def call_gemini(self, prompt: str, model_type: str = None, max_retries: int = 3, timeout: int = API_TIMEOUT) -> str:
+        """Gemini API 호출 (재시도 + 타임아웃 포함)"""
         client = self.get_client()
         model_name = self.get_model_name(model_type)
+
+        def _call_api():
+            """실제 API 호출 (타임아웃 래핑용)"""
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
 
         last_error = None
         for attempt in range(max_retries):
             try:
-                self.log(f'Gemini 호출 중... (시도 {attempt + 1}/{max_retries}, 프롬프트 {len(prompt)}자)')
+                self.log(f'Gemini 호출 중... (시도 {attempt + 1}/{max_retries}, 프롬프트 {len(prompt)}자, 타임아웃 {timeout}초)')
 
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
+                # 타임아웃 적용 API 호출
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_api)
+                    try:
+                        response = future.result(timeout=timeout)
+                    except FuturesTimeoutError:
+                        raise TimeoutError(f'API 응답 타임아웃 ({timeout}초 초과)')
 
                 # 응답 검증
                 if not response or not response.text:
@@ -248,28 +309,129 @@ class BaseStepService(ABC):
                 self.log(f'Gemini 응답 완료: {len(response.text)}자')
                 return response.text
 
+            except TimeoutError as e:
+                last_error = e
+                self.log(f'⏱️ 타임아웃 발생 (시도 {attempt + 1}/{max_retries}): {timeout}초 초과', 'error')
+                if attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)
+                    self.log(f'{wait_time}초 후 재시도...', 'warning')
+                    time.sleep(wait_time)
+                else:
+                    self.log(f'❌ API 최종 실패: 타임아웃 ({max_retries}회 재시도 후)', 'error')
+                    raise
+
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
+                error_type = type(e).__name__
 
                 # 재시도 가능한 오류인지 확인
                 retriable = any(keyword in error_str for keyword in [
                     'overload', 'rate limit', 'quota', '429', '503', '500',
-                    'timeout', 'unavailable', 'resource exhausted'
+                    'timeout', 'unavailable', 'resource exhausted',
+                    '빈 응답', 'empty response'  # 빈 응답도 재시도
                 ])
 
                 if retriable and attempt < max_retries - 1:
                     wait_time = 30 * (attempt + 1)
-                    self.log(f'API 오류 (시도 {attempt + 1}/{max_retries}): {str(e)[:100]}. {wait_time}초 후 재시도...', 'warning')
+                    self.log(f'API 오류 (시도 {attempt + 1}/{max_retries}): [{error_type}] {str(e)[:100]}. {wait_time}초 후 재시도...', 'warning')
                     time.sleep(wait_time)
                 else:
-                    self.log(f'API 최종 실패: {str(e)[:200]}', 'error')
+                    self.log(f'❌ API 최종 실패: [{error_type}] {str(e)[:300]}', 'error')
                     raise
 
         raise last_error
 
-    def call_gemini_with_search(self, prompt: str, model_type: str = None, max_retries: int = 3) -> dict:
-        """Gemini API 호출 + Google Search grounding (재시도 포함)
+    def call_gemini_json(self, prompt: str, response_schema, model_type: str = None, max_retries: int = 3, timeout: int = API_TIMEOUT) -> dict:
+        """Gemini API 호출 - JSON 구조화 출력 (Pydantic 스키마 강제)
+
+        Args:
+            prompt: 프롬프트 텍스트
+            response_schema: Pydantic BaseModel 클래스 (응답 스키마)
+            model_type: 모델 타입 (선택)
+            max_retries: 최대 재시도 횟수
+            timeout: 타임아웃 (초)
+
+        Returns:
+            dict: JSON 응답 (스키마에 맞는 딕셔너리)
+        """
+        import json
+        client = self.get_client()
+        model_name = self.get_model_name(model_type)
+
+        def _call_api():
+            """실제 API 호출 (타임아웃 래핑용)"""
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                )
+            )
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                self.log(f'Gemini JSON 호출 중... (시도 {attempt + 1}/{max_retries}, 스키마: {response_schema.__name__})')
+
+                # 타임아웃 적용 API 호출
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_api)
+                    try:
+                        response = future.result(timeout=timeout)
+                    except FuturesTimeoutError:
+                        raise TimeoutError(f'API 응답 타임아웃 ({timeout}초 초과)')
+
+                # 응답 검증
+                if not response or not response.text:
+                    raise ValueError('빈 응답')
+
+                # 토큰 사용량 추적
+                self.track_usage(response, model_name)
+
+                # JSON 파싱
+                try:
+                    result = json.loads(response.text)
+                    self.log(f'Gemini JSON 응답 완료: {len(response.text)}자')
+                    return result
+                except json.JSONDecodeError as e:
+                    raise ValueError(f'JSON 파싱 실패: {e}')
+
+            except TimeoutError as e:
+                last_error = e
+                self.log(f'⏱️ 타임아웃 발생 (시도 {attempt + 1}/{max_retries}): {timeout}초 초과', 'error')
+                if attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)
+                    self.log(f'{wait_time}초 후 재시도...', 'warning')
+                    time.sleep(wait_time)
+                else:
+                    raise
+
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                error_type = type(e).__name__
+
+                # 재시도 가능한 오류인지 확인
+                retriable = any(keyword in error_str for keyword in [
+                    'overload', 'rate limit', 'quota', '429', '503', '500',
+                    'timeout', 'unavailable', 'resource exhausted',
+                    '빈 응답', 'empty response'
+                ])
+
+                if retriable and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)
+                    self.log(f'API 오류 (시도 {attempt + 1}/{max_retries}): [{error_type}] {str(e)[:100]}. {wait_time}초 후 재시도...', 'warning')
+                    time.sleep(wait_time)
+                else:
+                    self.log(f'❌ API 최종 실패: [{error_type}] {str(e)[:300]}', 'error')
+                    raise
+
+        raise last_error
+
+    def call_gemini_with_search(self, prompt: str, model_type: str = None, max_retries: int = 3, timeout: int = API_TIMEOUT) -> dict:
+        """Gemini API 호출 + Google Search grounding (재시도 + 타임아웃 포함)
 
         Returns:
             dict: {
@@ -286,16 +448,29 @@ class BaseStepService(ABC):
             google_search=types.GoogleSearch()
         )
 
+        def _call_api():
+            """실제 API 호출 (타임아웃 래핑용)"""
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(tools=[search_tool])
+            )
+
         last_error = None
         response = None
 
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(tools=[search_tool])
-                )
+                self.log(f'검색 API 호출 중... (시도 {attempt + 1}/{max_retries}, 타임아웃 {timeout}초)')
+
+                # 타임아웃 적용 API 호출
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call_api)
+                    try:
+                        response = future.result(timeout=timeout)
+                    except FuturesTimeoutError:
+                        raise TimeoutError(f'검색 API 응답 타임아웃 ({timeout}초 초과)')
+
                 break  # 성공
 
             except Exception as e:
@@ -305,7 +480,8 @@ class BaseStepService(ABC):
                 # 재시도 가능한 오류인지 확인
                 retriable = any(keyword in error_str for keyword in [
                     'overload', 'rate limit', 'quota', '429', '503', '500',
-                    'timeout', 'unavailable', 'resource exhausted'
+                    'timeout', 'unavailable', 'resource exhausted',
+                    '빈 응답', 'empty response'  # 빈 응답도 재시도
                 ])
 
                 if retriable and attempt < max_retries - 1:

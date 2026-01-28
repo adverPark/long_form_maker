@@ -10,6 +10,7 @@
 
 import threading
 import time
+from decimal import Decimal
 from django.conf import settings
 from django.db import close_old_connections
 from .base import BaseStepService
@@ -31,17 +32,34 @@ class AutoPipelineService(BaseStepService):
     MAX_RETRIES = 3
     RETRY_DELAY = 30  # 초
 
-    # 실행할 단계들 (순서대로)
-    PIPELINE_STEPS = [
-        {'name': 'researcher', 'model': 'flash', 'display': '리서치'},
-        {'name': 'script_writer', 'model': 'pro', 'display': '대본 작성'},
-        {'name': 'scene_planner', 'model': 'flash', 'display': '씬 분할'},
+    # 실행할 단계들 (순서대로) - 모델은 get_pipeline_steps()에서 동적으로 설정
+    DEFAULT_PIPELINE_STEPS = [
+        {'name': 'researcher', 'default_model': '2.5-flash', 'display': '리서치'},
+        {'name': 'script_writer', 'default_model': '2.5-pro', 'display': '대본 작성'},
+        {'name': 'scene_planner', 'default_model': '2.5-flash', 'display': '씬 분할'},
         # TTS는 백그라운드로 시작
-        {'name': 'tts_generator', 'model': None, 'display': 'TTS 생성', 'background': True},
+        {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성', 'background': True},
         # 이미지 프롬프트 → 이미지 생성 (순차)
-        {'name': 'image_prompter', 'model': 'flash', 'display': '이미지 프롬프트'},
-        {'name': 'scene_generator', 'model': 'pro', 'display': '이미지 생성'},
+        {'name': 'image_prompter', 'default_model': '2.5-flash', 'display': '이미지 프롬프트'},
+        {'name': 'scene_generator', 'default_model': 'pro', 'display': '이미지 생성'},
     ]
+
+    def get_pipeline_steps(self):
+        """모델 설정이 적용된 파이프라인 단계 반환"""
+        # intermediate_data에서 모델 설정 가져오기
+        model_settings = {}
+        if self.execution.intermediate_data:
+            model_settings = self.execution.intermediate_data.get('model_settings', {})
+
+        steps = []
+        for step in self.DEFAULT_PIPELINE_STEPS:
+            step_copy = step.copy()
+            step_name = step['name']
+            # 모델 설정이 있으면 사용, 없으면 기본값
+            step_copy['model'] = model_settings.get(step_name, step['default_model'])
+            steps.append(step_copy)
+
+        return steps
 
     def execute(self):
         global _running_count
@@ -80,6 +98,14 @@ class AutoPipelineService(BaseStepService):
             self.log(f'이전 자동 파이프라인 {count}개 취소')
             running_auto.update(status='cancelled', progress_message='새 파이프라인으로 대체됨')
 
+        # 파이프라인 단계 가져오기 (모델 설정 적용)
+        pipeline_steps = self.get_pipeline_steps()
+
+        # 선택된 모델 로깅
+        model_settings = self.execution.intermediate_data.get('model_settings', {}) if self.execution.intermediate_data else {}
+        if model_settings:
+            self.log(f'모델 설정: {model_settings}')
+
         # 이미 있는 데이터 확인
         has_research = hasattr(self.project, 'research') and self.project.research
         has_draft = hasattr(self.project, 'draft') and self.project.draft
@@ -97,7 +123,7 @@ class AutoPipelineService(BaseStepService):
             self.log(f'씬 {self.project.scenes.count()}개 있음 - 씬분할 건너뜀')
 
         # 실행할 단계만 카운트 (백그라운드 제외)
-        steps_to_run = [s for s in self.PIPELINE_STEPS
+        steps_to_run = [s for s in pipeline_steps
                         if s['name'] not in skip_steps and not s.get('background')]
         total_steps = len(steps_to_run)
 
@@ -108,7 +134,7 @@ class AutoPipelineService(BaseStepService):
         current_step = 0
         background_threads = []  # 백그라운드 작업 추적
 
-        for step_config in self.PIPELINE_STEPS:
+        for step_config in pipeline_steps:
             step_name = step_config['name']
             model_type = step_config['model']
             display_name = step_config['display']
@@ -157,6 +183,16 @@ class AutoPipelineService(BaseStepService):
                 raise Exception(f'{display_name} 실패: {last_error}')
 
             self.log(f'{display_name} 완료')
+
+            # 씬 분할 후 나레이션 검증
+            if step_name == 'scene_planner':
+                self.project.refresh_from_db()
+                scenes_without_narration = self.project.scenes.filter(narration='').count()
+                total_scenes = self.project.scenes.count()
+                if scenes_without_narration > 0:
+                    self.log(f'⚠️ 나레이션 없는 씬: {scenes_without_narration}/{total_scenes}개', 'error')
+                    if scenes_without_narration == total_scenes:
+                        raise Exception('모든 씬의 나레이션이 비어있습니다. 씬 분할 결과를 확인해주세요.')
 
         # 백그라운드 작업 완료 대기
         for bg_thread, display_name in background_threads:

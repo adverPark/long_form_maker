@@ -3,12 +3,116 @@
 {% block title %}대시보드 - 롱폼 영상 제작{% endblock %}
 
 {% block content %}
+<!-- 공지사항 -->
+<div class="alert alert-warning alert-dismissible fade show mb-3" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+    <strong>다운받아서 끝난 프로젝트는 바로바로 삭제해 주세요. (용량 부족합니다!)</strong>
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-house-door"></i> 대시보드</h2>
     <a href="{% url 'pipeline:project_create' %}" class="btn btn-primary">
         <i class="bi bi-plus-lg"></i> 새 프로젝트
     </a>
 </div>
+
+<!-- 작업 목록 (진행 중 + 실패) -->
+{% if running_executions %}
+<div class="card mb-4 border-primary">
+    <div class="card-header bg-primary text-white">
+        <i class="bi bi-list-task"></i> 작업 목록
+    </div>
+    <ul class="list-group list-group-flush">
+        {% for exec in running_executions %}
+        <li class="list-group-item {% if exec.status == 'failed' %}list-group-item-danger{% elif exec.status == 'completed' %}list-group-item-success{% endif %}">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>{{ exec.project.name }}</strong>
+                    <span class="badge {% if exec.status == 'running' %}bg-info{% elif exec.status == 'completed' %}bg-success{% else %}bg-danger{% endif %} ms-2">
+                        {{ exec.step.display_name }}
+                    </span>
+                    {% if exec.status == 'failed' %}
+                    <span class="badge bg-danger ms-1">실패</span>
+                    {% elif exec.status == 'completed' %}
+                    <span class="badge bg-success ms-1">완료</span>
+                    {% endif %}
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <a href="{% url 'pipeline:step_progress' exec.project.pk exec.pk %}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-eye"></i> 보기
+                    </a>
+                    {% if exec.status == 'running' %}
+                    <button type="button" class="btn btn-sm btn-outline-danger"
+                            onclick="cancelExecution({{ exec.project.pk }}, {{ exec.pk }})">
+                        <i class="bi bi-x-lg"></i> 취소
+                    </button>
+                    {% elif exec.status == 'completed' %}
+                    <button type="button" class="btn btn-sm btn-success"
+                            onclick="acknowledgeExecution({{ exec.project.pk }}, {{ exec.pk }})">
+                        <i class="bi bi-check-lg"></i> 확인
+                    </button>
+                    {% else %}
+                    <form method="post" action="{% url 'pipeline:step_execute' exec.project.pk exec.step.name %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-arrow-clockwise"></i> 다시
+                        </button>
+                    </form>
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            onclick="deleteExecution({{ exec.project.pk }}, {{ exec.pk }})">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            {% if exec.status == 'running' %}
+            <div class="progress mt-2" style="height: 8px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated exec-progress-bar"
+                     data-exec-id="{{ exec.pk }}" data-project-id="{{ exec.project.pk }}"
+                     style="width: {{ exec.progress_percent }}%"></div>
+            </div>
+            <small class="text-muted exec-progress-text" data-exec-id="{{ exec.pk }}">{{ exec.progress_percent }}% - {{ exec.progress_message }}</small>
+            {% elif exec.status == 'completed' %}
+            <small class="text-success"><i class="bi bi-check-circle"></i> {{ exec.step.display_name }}이(가) 완료되었습니다.</small>
+            {% else %}
+            <small class="text-danger">{{ exec.error_message|truncatechars:100 }}</small>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- 작업 목록 자동 갱신 -->
+<script>
+(function() {
+    const bars = document.querySelectorAll('.exec-progress-bar');
+    if (bars.length === 0) return;
+
+    function updateProgress() {
+        bars.forEach(bar => {
+            const execId = bar.dataset.execId;
+            const projectId = bar.dataset.projectId;
+            const text = document.querySelector(`.exec-progress-text[data-exec-id="${execId}"]`);
+
+            fetch(`/pipeline/project/${projectId}/progress/${execId}/api/`)
+                .then(r => r.json())
+                .then(data => {
+                    bar.style.width = data.progress_percent + '%';
+                    if (text) text.textContent = `${data.progress_percent}% - ${data.progress_message}`;
+
+                    if (data.status !== 'running') {
+                        setTimeout(() => location.reload(), 500);
+                    }
+                })
+                .catch(err => console.log('Progress error:', err));
+        });
+    }
+
+    setInterval(updateProgress, 3000);
+})();
+</script>
+{% endif %}
 
 {% if projects %}
 <div class="row">
@@ -48,10 +152,13 @@
                     {% endfor %}
                 </div>
             </div>
-            <div class="card-footer">
+            <div class="card-footer d-flex justify-content-between">
                 <a href="{% url 'pipeline:project_data' project.pk %}" class="btn btn-sm btn-primary">
                     <i class="bi bi-folder-fill"></i> 열기
                 </a>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteProject({{ project.pk }}, '{{ project.name|escapejs }}')">
+                    <i class="bi bi-trash"></i> 삭제
+                </button>
             </div>
         </div>
     </div>
@@ -67,4 +174,98 @@
     </a>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function cancelExecution(projectId, executionId) {
+    if (!confirm('작업을 취소하시겠습니까?')) return;
+
+    fetch(`/pipeline/project/${projectId}/progress/${executionId}/cancel/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '취소 실패');
+        }
+    })
+    .catch(err => {
+        alert('오류 발생: ' + err);
+    });
+}
+
+function deleteExecution(projectId, executionId) {
+    if (!confirm('이 작업 기록을 삭제하시겠습니까?')) return;
+
+    fetch(`/pipeline/project/${projectId}/progress/${executionId}/delete/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    })
+    .catch(err => {
+        alert('오류 발생: ' + err);
+    });
+}
+
+function acknowledgeExecution(projectId, executionId) {
+    fetch(`/pipeline/project/${projectId}/progress/${executionId}/acknowledge/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '확인 실패');
+        }
+    })
+    .catch(err => {
+        alert('오류 발생: ' + err);
+    });
+}
+
+function deleteProject(projectId, projectName) {
+    if (!confirm(`"${projectName}" 프로젝트를 삭제하시겠습니까?\n\n모든 파일(이미지, 영상, 음성)이 함께 삭제됩니다.`)) return;
+
+    fetch(`/pipeline/project/${projectId}/delete/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    })
+    .catch(err => {
+        alert('오류 발생: ' + err);
+    });
+}
+</script>
 {% endblock %}

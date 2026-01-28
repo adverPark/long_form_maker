@@ -10,9 +10,9 @@ from .base import BaseStepService
 
 
 class VideoGeneratorService(BaseStepService):
-    """앞 4개 씬 동영상 생성 서비스 (Replicate seedance-1-pro)
+    """인트로 씬 동영상 생성 서비스 (Replicate seedance-1-pro)
 
-    인트로 씬(1~4번)을 이미지에서 동영상으로 변환
+    선택한 개수만큼 씬을 이미지에서 동영상으로 변환
     - 모델: bytedance/seedance-1-pro (Replicate)
     - 입력: 씬 이미지 + image_prompt
     - 출력: 5초 480p 동영상
@@ -20,6 +20,7 @@ class VideoGeneratorService(BaseStepService):
 
     agent_name = 'video_generator'
     MODEL_ID = "bytedance/seedance-1-pro"
+    DEFAULT_SCENE_COUNT = 4  # 기본값
 
     # 필수 프롬프트 (한글 보존 + 입 움직임 금지)
     REQUIRED_PROMPT_SUFFIX = """
@@ -32,8 +33,13 @@ Only subtle natural movements like blinking, slight head movement, or breathing.
         self.update_progress(5, '씬 로딩 중...')
         self.log('인트로 영상 생성 시작')
 
-        # DB에서 앞 4개 씬 가져오기
-        scenes = list(self.project.scenes.filter(scene_number__lte=4).order_by('scene_number'))
+        # 씬 개수 설정 (intermediate_data에서 가져오기, 기본값 4)
+        scene_count = self.DEFAULT_SCENE_COUNT
+        if self.execution.intermediate_data:
+            scene_count = self.execution.intermediate_data.get('scene_count', self.DEFAULT_SCENE_COUNT)
+
+        # DB에서 씬 가져오기
+        scenes = list(self.project.scenes.filter(scene_number__lte=scene_count).order_by('scene_number'))
 
         if not scenes:
             raise ValueError('씬이 없습니다. 씬 분할을 먼저 완료해주세요.')

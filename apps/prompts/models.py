@@ -49,6 +49,30 @@ class AgentPrompt(models.Model):
         super().save(*args, **kwargs)
 
 
+class UserAgentPrompt(models.Model):
+    """사용자별 에이전트 프롬프트 (사용자 커스텀)"""
+    AGENT_CHOICES = AgentPrompt.AGENT_CHOICES
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='custom_prompts',
+        verbose_name="사용자"
+    )
+    agent_name = models.CharField(max_length=50, choices=AGENT_CHOICES, verbose_name="에이전트")
+    prompt_content = models.TextField(verbose_name="프롬프트 내용", help_text="Markdown 형식")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "사용자별 프롬프트"
+        verbose_name_plural = "사용자별 프롬프트"
+        unique_together = ['user', 'agent_name']  # 사용자당 에이전트별 1개만
+
+    def __str__(self):
+        return f"{self.user.username} - {self.get_agent_name_display()}"
+
+
 class AgentPromptHistory(models.Model):
     """프롬프트 변경 히스토리"""
     prompt = models.ForeignKey(AgentPrompt, on_delete=models.CASCADE, related_name='history')

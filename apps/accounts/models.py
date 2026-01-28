@@ -6,7 +6,9 @@ from cryptography.fernet import Fernet
 class User(AbstractUser):
     """커스텀 사용자 모델"""
     GEMINI_MODEL_CHOICES = [
-        ('flash', 'Gemini 3 Flash (빠름, 저렴)'),
+        ('2.5-flash', 'Gemini 2.5 Flash (최신, 저렴)'),
+        ('2.5-pro', 'Gemini 2.5 Pro (최신, 고품질)'),
+        ('flash', 'Gemini 3 Flash (빠름)'),
         ('pro', 'Gemini 3 Pro (고품질)'),
     ]
 

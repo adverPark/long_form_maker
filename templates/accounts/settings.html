@@ -5,38 +5,6 @@
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-gear"></i> 설정</h2>
 
-<!-- Gemini 모델 선택 -->
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-cpu"></i> Gemini 모델 선택</h5>
-    </div>
-    <div class="card-body">
-        <form method="post" action="{% url 'accounts:set_gemini_model' %}">
-            {% csrf_token %}
-            <div class="row">
-                {% for value, label in gemini_model_choices %}
-                <div class="col-md-6 mb-2">
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="gemini_model"
-                               id="model_{{ value }}" value="{{ value }}"
-                               {% if current_gemini_model == value %}checked{% endif %}
-                               onchange="this.form.submit()">
-                        <label class="form-check-label" for="model_{{ value }}">
-                            <strong>{{ label }}</strong>
-                            {% if value == 'flash' %}
-                            <br><small class="text-muted">빠른 응답, 비용 효율적. 일반적인 리서치에 적합</small>
-                            {% else %}
-                            <br><small class="text-muted">높은 품질, 복잡한 분석. 중요한 대본 작성에 적합</small>
-                            {% endif %}
-                        </label>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </form>
-    </div>
-</div>
-
 <div class="row">
     <!-- API 키 관리 -->
     <div class="col-12 mb-4">
@@ -417,7 +385,7 @@
                     <li class="list-group-item">
                         <div class="d-flex justify-content-between align-items-start">
                             <div style="cursor: pointer;"
-                                 onclick="editVoice({{ voice.pk }}, '{{ voice.name|escapejs }}', '{{ voice.reference_text|escapejs }}', {{ voice.temperature }}, {{ voice.top_p }}, {{ voice.seed }})">
+                                 onclick="editVoice({{ voice.pk }}, '{{ voice.name|escapejs }}', '{{ voice.reference_text|escapejs }}', {{ voice.temperature }}, {{ voice.top_p }}, {{ voice.seed }}, '{{ voice.reference_audio.url }}')">
                                 <strong>{{ voice.name }}</strong>
                                 {% if voice.is_default %}
                                 <span class="badge bg-primary ms-2">기본</span>
@@ -431,7 +399,7 @@
                             </div>
                             <div class="btn-group-vertical btn-group-sm">
                                 <button type="button" class="btn btn-sm btn-outline-secondary mb-1"
-                                        onclick="editVoice({{ voice.pk }}, '{{ voice.name|escapejs }}', '{{ voice.reference_text|escapejs }}', {{ voice.temperature }}, {{ voice.top_p }}, {{ voice.seed }})">
+                                        onclick="editVoice({{ voice.pk }}, '{{ voice.name|escapejs }}', '{{ voice.reference_text|escapejs }}', {{ voice.temperature }}, {{ voice.top_p }}, {{ voice.seed }}, '{{ voice.reference_audio.url }}')">
                                     <i class="bi bi-pencil"></i>
                                 </button>
                                 {% if not voice.is_default %}
@@ -657,6 +625,10 @@
                     </div>
                 </div>
                 <div class="mb-3">
+                    <label class="form-label">현재 참조 음성</label>
+                    <div id="editVoiceCurrentAudio"></div>
+                </div>
+                <div class="mb-3">
                     <label class="form-label">새 참조 음성 (선택)</label>
                     <input type="file" id="editVoiceAudio" class="form-control" accept="audio/*">
                     <small class="text-muted">업로드 시 기존 음성 대체</small>
@@ -792,7 +764,7 @@ function saveCharacter() {
 }
 
 // TTS 음성 수정
-function editVoice(pk, name, referenceText, temperature, topP, seed) {
+function editVoice(pk, name, referenceText, temperature, topP, seed, audioUrl) {
     document.getElementById('editVoiceId').value = pk;
     document.getElementById('editVoiceName').value = name;
     document.getElementById('editVoiceText').value = referenceText;
@@ -800,6 +772,20 @@ function editVoice(pk, name, referenceText, temperature, topP, seed) {
     document.getElementById('editVoiceTopP').value = topP;
     document.getElementById('editVoiceSeed').value = seed;
     document.getElementById('editVoiceAudio').value = '';
+
+    // 현재 음성 파일 표시
+    const audioContainer = document.getElementById('editVoiceCurrentAudio');
+    if (audioUrl) {
+        audioContainer.innerHTML = `
+            <audio controls class="w-100" style="height: 40px;">
+                <source src="${audioUrl}" type="audio/wav">
+            </audio>
+            <small class="text-muted">${audioUrl.split('/').pop()}</small>
+        `;
+    } else {
+        audioContainer.innerHTML = '<small class="text-muted">음성 파일 없음</small>';
+    }
+
     new bootstrap.Modal(document.getElementById('editVoiceModal')).show();
 }
 

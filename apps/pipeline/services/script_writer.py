@@ -120,11 +120,39 @@ class ScriptWriterService(BaseStepService):
                 'best_title': {'title': '', 'hook': ''},
             }
 
+        # Research 모델이 있는지 확인
         if not hasattr(self.project, 'research') or not self.project.research:
             return None
 
         r = self.project.research
-        return {
+
+        # manual_notes만 있는 경우 (리서치 실행 안하고 수동 자료만 입력한 경우)
+        if r.manual_notes and not r.summary:
+            topic = r.topic or (self.project.topic.title if hasattr(self.project, 'topic') and self.project.topic else '수동 입력 주제')
+            return {
+                'topic': topic,
+                'summary': r.manual_notes,
+                'quotes': [],
+                'numbers': [],
+                'person_stories': [],
+                'time_change': {},
+                'paradox': {},
+                'best_title': {'title': '', 'hook': ''},
+            }
+
+        # 리서치 데이터가 전혀 없으면 None (summary, manual_notes, quotes, numbers 등 모두 체크)
+        has_data = (
+            r.summary or
+            r.manual_notes or
+            r.quotes or
+            r.numbers or
+            r.article_summaries
+        )
+        if not has_data:
+            return None
+
+        # 기존 리서치 데이터 + manual_notes 조합
+        data = {
             'topic': r.topic or '',
             'summary': r.summary or '',
             'quotes': r.quotes or [],
@@ -137,6 +165,17 @@ class ScriptWriterService(BaseStepService):
             'narrative_structure': r.narrative_structure or {},
             'article_summaries': r.article_summaries or [],
         }
+
+        # manual_notes가 있으면 summary에 추가
+        if r.manual_notes:
+            data['manual_notes'] = r.manual_notes
+            # summary에 manual_notes 내용 추가
+            if data['summary']:
+                data['summary'] = data['summary'] + '\n\n--- 수동 추가 자료 ---\n' + r.manual_notes
+            else:
+                data['summary'] = r.manual_notes
+
+        return data
 
     # 기본 프롬프트 (DB에 없을 때 사용)
     DEFAULT_PROMPT = '''# 경제 유튜브 대본 작가
@@ -380,6 +419,9 @@ JSON 형식으로 출력하세요:
             if best_title.get('pattern'):
                 title_info += f"패턴: {best_title['pattern']}\n"
 
+        # 수동 추가 자료 포맷
+        manual_notes_text = research.get('manual_notes', '')
+
         return f"""# 리서치 자료
 
 ## 주제
@@ -387,6 +429,9 @@ JSON 형식으로 출력하세요:
 
 ## 요약
 {research.get('summary', '')}
+
+## 수동 추가 자료 (중요!)
+{manual_notes_text if manual_notes_text else '(없음)'}
 
 ## 제목 정보
 {title_info}

@@ -1,7 +1,26 @@
 import json
 import re
+from typing import List
+from pydantic import BaseModel, Field
 from .base import BaseStepService
 from apps.pipeline.models import Scene
+
+
+# Pydantic 모델 정의 - Gemini 구조화 출력용
+class SceneData(BaseModel):
+    """씬 데이터 스키마"""
+    scene_id: int = Field(description="씬 번호 (1부터 시작)")
+    section: str = Field(description="섹션 (intro, body_1, body_2, body_3, action, outro)")
+    duration_seconds: int = Field(description="씬 길이 (초)")
+    narration: str = Field(description="자막에 표시될 대본 내용 - 반드시 원본 대본의 해당 부분을 그대로 포함")
+    narration_tts: str = Field(description="TTS용 텍스트 - 숫자를 한글로 변환")
+    image_prompt: str = Field(default="[PLACEHOLDER]", description="이미지 프롬프트 (항상 [PLACEHOLDER])")
+    character_appears: bool = Field(description="캐릭터 등장 여부")
+
+
+class SceneListResponse(BaseModel):
+    """씬 목록 응답 스키마"""
+    scenes: List[SceneData] = Field(description="분할된 씬 목록")
 
 
 def number_to_korean(num_str: str) -> str:
@@ -109,16 +128,39 @@ class ScenePlannerService(BaseStepService):
         self.update_progress(10, '프롬프트 준비 중...')
         prompt = self._build_prompt(title, content)
 
-        # Gemini 호출
+        # Gemini 호출 (Pydantic 구조화 출력)
         self.update_progress(20, 'AI 씬 분할 요청 중...')
-        self.log('Gemini API 호출 중...')
-        response = self.call_gemini(prompt)
-        self.log('Gemini 응답 수신')
+        self.log('Gemini API 호출 중... (구조화 출력 모드)')
+        try:
+            response_data = self.call_gemini_json(prompt, SceneListResponse)
+            scenes_data = response_data.get('scenes', [])
+            self.log(f'Gemini 응답 수신: {len(scenes_data)}개 씬')
+        except TimeoutError as e:
+            self.log(f'❌ 씬 분할 실패: 타임아웃 - 대본이 너무 길거나 서버가 바쁨', 'error')
+            raise ValueError(f'Gemini API 타임아웃: 대본 길이({len(content)}자)가 너무 길 수 있습니다. 잠시 후 다시 시도해주세요.')
+        except Exception as e:
+            self.log(f'❌ 씬 분할 실패: {type(e).__name__} - {str(e)[:200]}', 'error')
+            raise
 
-        # 파싱
-        self.update_progress(50, '결과 파싱 중...')
-        scenes_data = self._parse_response(response)
+        # 검증
+        self.update_progress(50, '결과 검증 중...')
+        if not scenes_data:
+            raise ValueError('씬 분할 결과가 비어있습니다.')
         self.log(f'파싱 결과: {len(scenes_data)}개 씬')
+
+        # 검증 0: 나레이션 빈 씬 체크 (가장 중요!)
+        empty_narration_count = sum(1 for s in scenes_data if not s.get('narration', '').strip())
+        if empty_narration_count > 0:
+            self.log(f'⚠️ 나레이션 없는 씬: {empty_narration_count}개', 'error')
+            if empty_narration_count == len(scenes_data):
+                # 모든 씬이 비어있으면 재시도
+                self.update_progress(55, '나레이션 빈 씬 감지, 재분할 중...')
+                self.log('모든 씬의 나레이션이 비어있음! 재시도...', 'error')
+                scenes_data = self._retry_with_full_content(title, content, scenes_data)
+                # 재시도 후에도 비어있으면 에러
+                empty_after_retry = sum(1 for s in scenes_data if not s.get('narration', '').strip())
+                if empty_after_retry == len(scenes_data):
+                    raise ValueError('씬 분할 실패: 모든 씬의 나레이션이 비어있습니다. 프롬프트를 확인해주세요.')
 
         # 검증 1: 대본 누락 체크
         narration_total = sum(len(s.get('narration', '')) for s in scenes_data)
@@ -198,22 +240,22 @@ class ScenePlannerService(BaseStepService):
 
 ---
 
-⚠️ 중요: 위 대본의 모든 문장이 씬에 포함되어야 합니다!
+⚠️ 가장 중요: narration 필드에 대본 내용을 반드시 포함!
 - 원본 글자수: {len(content)}자
-- 씬 narration 합계도 비슷해야 함 (차이 100자 이내)
-- 마지막 문장까지 빠짐없이!
+- 각 씬의 narration에 해당 구간의 대본 텍스트가 반드시 들어가야 함
+- narration이 비어있으면 안 됨!
+- 마지막 문장까지 빠짐없이!"""
 
-JSON 형식으로 출력하세요."""
-
-    def _get_default_prompt(self) -> str:
-        """기본 프롬프트"""
-        return """# 씬 분할 전문가
+    # 기본 프롬프트 (클래스 변수)
+    DEFAULT_PROMPT = """# 씬 분할 전문가
 
 대본을 씬으로 분할합니다.
 
-## 절대 규칙
+## 🚨 절대 규칙 (반드시 지켜야 함!)
 
-### 1. 대본 누락 금지 (가장 중요!)
+### 1. narration 필드 필수! (가장 중요!)
+- 각 씬의 narration에 해당 구간의 대본 텍스트를 반드시 포함
+- narration이 비어있으면 절대 안 됨!
 - 대본의 모든 문장이 씬에 포함되어야 함
 - 글자수 차이 100자 이내
 
@@ -228,10 +270,8 @@ JSON 형식으로 출력하세요."""
 - 이미지 프롬프트는 작성하지 마세요
 
 ### 5. narration_tts
-- 숫자를 한글로 변환
-- 470% → 사백칠십퍼센트
-- 2024년 → 이천이십사년
-- 100억 → 백억
+- narration을 TTS용으로 변환
+- 숫자를 한글로 변환: 470% → 사백칠십퍼센트, 2024년 → 이천이십사년
 
 ## section 종류
 - intro: 오프닝 (처음 8-10개 씬)
@@ -241,23 +281,18 @@ JSON 형식으로 출력하세요."""
 - action: 액션 플랜
 - outro: 마무리
 
-## 출력 형식
+## 필드 설명
+- scene_id: 씬 번호 (1부터 시작)
+- section: 섹션명
+- duration_seconds: 씬 길이 (초)
+- narration: 자막에 표시될 대본 내용 (필수! 비어있으면 안 됨!)
+- narration_tts: TTS용 텍스트 (숫자를 한글로 변환)
+- image_prompt: 항상 "[PLACEHOLDER]"
+- character_appears: 캐릭터 등장 여부"""
 
-```json
-{
-  "scenes": [
-    {
-      "scene_id": 1,
-      "section": "intro",
-      "duration_seconds": 5,
-      "narration": "자막에 표시될 내용",
-      "narration_tts": "숫자는 한글로 변환",
-      "image_prompt": "[PLACEHOLDER]",
-      "character_appears": true
-    }
-  ]
-}
-```"""
+    def _get_default_prompt(self) -> str:
+        """기본 프롬프트 반환 (하위 호환성)"""
+        return self.DEFAULT_PROMPT
 
     def _parse_response(self, response: str) -> list:
         """응답 파싱"""
@@ -290,10 +325,7 @@ JSON 형식으로 출력하세요."""
         return []
 
     def _retry_with_full_content(self, title: str, content: str, partial_scenes: list) -> list:
-        """대본 누락 시 재시도"""
-        # 어디까지 분할됐는지 확인
-        last_narration = partial_scenes[-1].get('narration', '') if partial_scenes else ''
-
+        """대본 누락 시 재시도 (구조화 출력)"""
         retry_prompt = f"""이전 분할에서 대본 후반부가 누락되었습니다.
 
 ## 누락된 부분 포함해서 다시 전체 분할해주세요!
@@ -304,15 +336,17 @@ JSON 형식으로 출력하세요."""
 마지막까지 빠짐없이 모든 문장을 씬으로 분할하세요.
 원본 글자수: {len(content)}자
 
-JSON 형식으로 출력:
-```json
-{{"scenes": [...]}}
-```"""
+## 중요 규칙
+- narration 필드에 원본 대본 내용을 그대로 포함해야 합니다
+- 모든 문장이 빠짐없이 씬에 포함되어야 합니다"""
 
-        response = self.call_gemini(retry_prompt)
-        new_scenes = self._parse_response(response)
-
-        return new_scenes if new_scenes else partial_scenes
+        try:
+            response_data = self.call_gemini_json(retry_prompt, SceneListResponse)
+            new_scenes = response_data.get('scenes', [])
+            return new_scenes if new_scenes else partial_scenes
+        except Exception as e:
+            self.log(f'재시도 실패: {str(e)[:100]}', 'error')
+            return partial_scenes
 
     def _adjust_character_appearance(self, scenes_data: list) -> list:
         """캐릭터 등장 비율 30% 이상으로 조정"""

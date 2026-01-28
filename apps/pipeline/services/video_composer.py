@@ -35,7 +35,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,AppleSDGothicNeo-Bold,75,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
+Style: Default,Black Han Sans,75,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -402,7 +402,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 '-i', audio_path,
                 '-filter_complex', f'[0:v]{base_filter}[v]',
                 '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
                 '-c:a', 'aac', '-b:a', '192k',
                 '-t', str(duration),  # 오디오 길이로 자르기
                 str(output_path)
@@ -415,7 +415,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 '-i', audio_path,
                 '-filter_complex', f'[0:v]{base_filter}[v]',
                 '-map', '[v]', '-map', '1:a',
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+                '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
                 '-c:a', 'aac', '-b:a', '192k',
                 '-t', str(duration),
                 str(output_path)
@@ -449,7 +449,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             '-i', audio_path,
             '-filter_complex', f'[0:v]{filter_complex}[v]',
             '-map', '[v]', '-map', '1:a',
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
             '-c:a', 'aac', '-b:a', '192k',
             '-t', str(duration),
             str(output_path)

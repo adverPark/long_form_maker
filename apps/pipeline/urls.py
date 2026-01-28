@@ -13,7 +13,10 @@ urlpatterns = [
     path('project/<int:pk>/progress/<int:execution_id>/', views.step_progress, name='step_progress'),
     path('project/<int:pk>/progress/<int:execution_id>/api/', views.step_progress_api, name='step_progress_api'),
     path('project/<int:pk>/progress/<int:execution_id>/cancel/', views.step_cancel, name='step_cancel'),
+    path('project/<int:pk>/progress/<int:execution_id>/delete/', views.step_delete, name='step_delete'),
+    path('project/<int:pk>/progress/<int:execution_id>/acknowledge/', views.step_acknowledge, name='step_acknowledge'),
     path('project/<int:pk>/draft/update/', views.draft_update, name='draft_update'),
+    path('project/<int:pk>/research/manual-notes/', views.research_manual_notes, name='research_manual_notes'),
     path('project/<int:pk>/media/<str:media_type>/', views.download_media, name='download_media'),
     path('project/<int:pk>/media/<str:media_type>/<int:scene_id>/', views.download_media, name='download_media_scene'),
     path('project/<int:pk>/settings/', views.project_settings, name='project_settings'),
@@ -40,4 +43,8 @@ urlpatterns = [
     path('project/<int:pk>/upload-info/', views.upload_info, name='upload_info'),
     path('project/<int:pk>/upload-info/generate/', views.generate_upload_info, name='generate_upload_info'),
     path('project/<int:pk>/generate-thumbnail/', views.generate_thumbnail, name='generate_thumbnail'),
+
+    # 사용자별 프롬프트
+    path('prompt/<str:agent_name>/', views.user_prompt, name='user_prompt'),
+    path('prompt/<str:agent_name>/reset/', views.user_prompt_reset, name='user_prompt_reset'),
 ]

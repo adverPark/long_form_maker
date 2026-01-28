@@ -213,21 +213,110 @@
     </div>
 </div>
 
-<!-- 실행 중인 작업 배너 (여러 개 가능) -->
+<!-- 작업 목록 (진행 중 + 실패 + 완료) -->
 {% if running_executions %}
-<div class="alert alert-warning mb-4">
-    <div class="d-flex flex-wrap gap-3">
-        {% for exec in running_executions %}
-        <div class="d-flex align-items-center gap-2">
-            <i class="bi bi-hourglass-split"></i>
-            <strong>{{ exec.step.display_name }}</strong> ({{ exec.progress_percent }}%)
-            <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="btn btn-warning btn-sm py-0">
-                보기
-            </a>
-        </div>
-        {% endfor %}
+<div class="card mb-4 border-primary" id="work-list-card">
+    <div class="card-header bg-primary text-white">
+        <i class="bi bi-list-task"></i> 작업 목록
     </div>
+    <ul class="list-group list-group-flush" id="work-list">
+        {% for exec in running_executions %}
+        <li class="list-group-item work-item {% if exec.status == 'failed' %}list-group-item-danger{% elif exec.status == 'completed' %}list-group-item-success{% endif %}"
+            data-exec-id="{{ exec.pk }}">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="badge {% if exec.status == 'running' %}bg-info{% elif exec.status == 'completed' %}bg-success{% else %}bg-danger{% endif %}">
+                        {{ exec.step.display_name }}
+                    </span>
+                    {% if exec.status == 'failed' %}
+                    <span class="badge bg-danger ms-1">실패</span>
+                    {% elif exec.status == 'completed' %}
+                    <span class="badge bg-success ms-1">완료</span>
+                    {% endif %}
+                    <small class="text-muted ms-2">{{ exec.created_at|date:"H:i" }}</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    {% if exec.status == 'completed' %}
+                    <a href="{% url 'pipeline:project_detail' project.pk %}" class="btn btn-sm btn-outline-success">
+                        <i class="bi bi-folder"></i> 보기
+                    </a>
+                    {% else %}
+                    <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-eye"></i> 로그
+                    </a>
+                    {% endif %}
+                    {% if exec.status == 'running' %}
+                    <button type="button" class="btn btn-sm btn-outline-danger btn-cancel-exec"
+                            data-project-id="{{ project.pk }}" data-exec-id="{{ exec.pk }}">
+                        <i class="bi bi-x-lg"></i> 취소
+                    </button>
+                    {% elif exec.status == 'completed' %}
+                    <button type="button" class="btn btn-sm btn-success btn-dismiss-exec"
+                            data-project-id="{{ project.pk }}" data-exec-id="{{ exec.pk }}">
+                        <i class="bi bi-check-lg"></i> 확인
+                    </button>
+                    {% else %}
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk exec.step.name %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-arrow-clockwise"></i> 다시
+                        </button>
+                    </form>
+                    <button type="button" class="btn btn-sm btn-outline-secondary btn-delete-exec"
+                            data-project-id="{{ project.pk }}" data-exec-id="{{ exec.pk }}">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            {% if exec.status == 'running' %}
+            <div class="progress mt-2" style="height: 10px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated exec-progress-bar"
+                     data-exec-id="{{ exec.pk }}"
+                     style="width: {{ exec.progress_percent }}%"></div>
+            </div>
+            <small class="text-muted exec-progress-text" data-exec-id="{{ exec.pk }}">{{ exec.progress_percent }}% - {{ exec.progress_message }}</small>
+            {% elif exec.status == 'completed' %}
+            <small class="text-success"><i class="bi bi-check-circle"></i> {{ exec.step.display_name }}이(가) 완료되었습니다.</small>
+            {% else %}
+            <small class="text-danger">{{ exec.error_message|truncatechars:80 }}</small>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
 </div>
+
+<!-- 작업 목록 자동 갱신 -->
+<script>
+(function() {
+    const runningExecs = [{% for exec in running_executions %}{% if exec.status == 'running' %}{ id: {{ exec.pk }}, projectId: {{ project.pk }} },{% endif %}{% endfor %}];
+
+    if (runningExecs.length === 0) return;
+
+    function updateProgress() {
+        runningExecs.forEach(exec => {
+            fetch(`/pipeline/project/${exec.projectId}/progress/${exec.id}/api/`)
+                .then(r => r.json())
+                .then(data => {
+                    const bar = document.querySelector(`.exec-progress-bar[data-exec-id="${exec.id}"]`);
+                    const text = document.querySelector(`.exec-progress-text[data-exec-id="${exec.id}"]`);
+
+                    if (bar) bar.style.width = data.progress_percent + '%';
+                    if (text) text.textContent = `${data.progress_percent}% - ${data.progress_message}`;
+
+                    // 완료/실패 시 페이지 새로고침
+                    if (data.status !== 'running') {
+                        setTimeout(() => location.reload(), 500);
+                    }
+                })
+                .catch(err => console.log('Progress update error:', err));
+        });
+    }
+
+    // 3초마다 갱신
+    setInterval(updateProgress, 3000);
+})();
+</script>
 {% endif %}
 
 <!-- 1. 주제 -->
@@ -250,13 +339,9 @@
                 </button>
             </form>
             {% if topic %}
-            <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}" class="d-inline">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-success"
-                        onclick="return confirm('리서치~이미지까지 자동 생성합니다.\n계속하시겠습니까?')">
-                    <i class="bi bi-lightning-fill"></i> 자동 생성
-                </button>
-            </form>
+            <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#autoPipelineModal">
+                <i class="bi bi-lightning-fill"></i> 자동 생성
+            </button>
             {% endif %}
         </div>
     </div>
@@ -284,11 +369,16 @@
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'researcher' %}" class="d-inline">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('researcher', 'Researcher')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'researcher' %}" class="d-inline ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="flash">Flash</option>
-                    <option value="pro">Pro</option>
+                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-pro">2.5 Pro</option>
+                    <option value="flash">3 Flash</option>
+                    <option value="pro">3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-search"></i> {% if research %}재실행{% else %}실행{% endif %}
@@ -382,6 +472,30 @@
             {% else %}
             <p class="text-muted mb-0">리서치를 실행하세요.</p>
             {% endif %}
+
+            <!-- 수동 자료 입력 -->
+            <hr class="my-3">
+            <details class="mb-2" {% if research.manual_notes %}open{% endif %}>
+                <summary><strong><i class="bi bi-pencil-square"></i> 수동 자료 입력</strong>
+                    <small class="text-muted ms-2">(리서치 없이 대본 작성 가능)</small>
+                </summary>
+                <div class="mt-3">
+                    <p class="small text-muted mb-2">
+                        직접 참고 자료를 입력하면 리서치 단계 없이 바로 대본 생성이 가능합니다.
+                        기존 리서치 자료와 함께 사용됩니다.
+                    </p>
+                    <textarea class="form-control" id="manual-notes" rows="8"
+                        placeholder="참고 자료, 인용구, 숫자/통계, 기사 내용 등을 자유롭게 입력하세요...">{{ research.manual_notes|default:'' }}</textarea>
+                    <div class="d-flex justify-content-between align-items-center mt-2">
+                        <small class="text-muted">
+                            <span id="manual-notes-count">{{ research.manual_notes|length|default:0 }}</span>자
+                        </small>
+                        <button class="btn btn-sm btn-primary" onclick="saveManualNotes()">
+                            <i class="bi bi-save"></i> 수동 자료 저장
+                        </button>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 </div>
@@ -408,11 +522,16 @@
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'script_writer' %}" class="d-inline">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('script_writer', 'Script Writer')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'script_writer' %}" class="d-inline ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="flash">Flash</option>
-                    <option value="pro" selected>Pro</option>
+                    <option value="2.5-flash">2.5 Flash</option>
+                    <option value="2.5-pro" selected>2.5 Pro</option>
+                    <option value="flash">3 Flash</option>
+                    <option value="pro">3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-pencil"></i> {% if draft %}재생성{% else %}생성{% endif %}
@@ -484,53 +603,56 @@
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
+            <!-- 씬 분할 프롬프트 편집 -->
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('scene_planner', 'Scene Planner')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
             <!-- 씬 분할 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_planner' %}" class="d-inline">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_planner' %}" class="d-inline ajax-step-form">
                 {% csrf_token %}
-                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="flash">Flash</option>
-                    <option value="pro">Pro</option>
-                </select>
-                <button type="submit" class="btn btn-sm btn-outline-secondary">
-                    <i class="bi bi-grid-3x3"></i> 씬분할
-                </button>
+                <div class="input-group input-group-sm d-inline-flex" style="width: auto;">
+                    <select name="model_type" class="form-select form-select-sm" style="width: auto;">
+                        <option value="2.5-flash" selected>2.5 Flash</option>
+                        <option value="2.5-pro">2.5 Pro</option>
+                        <option value="flash">3 Flash</option>
+                        <option value="pro">3 Pro</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-grid-3x3"></i> 씬분할
+                    </button>
+                </div>
             </form>
             <!-- 프롬프트 생성 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="d-inline ms-1">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="d-inline ms-2 ajax-step-form">
                 {% csrf_token %}
-                <label class="form-check form-check-inline mb-0" style="font-size: 0.85em;" title="Flash 모델용: 이미지에 텍스트 넣지 않음">
+                <div class="input-group input-group-sm d-inline-flex" style="width: auto;">
+                    <select name="model_type" class="form-select form-select-sm" style="width: auto;">
+                        <option value="2.5-flash" selected>2.5 Flash</option>
+                        <option value="2.5-pro">2.5 Pro</option>
+                        <option value="flash">3 Flash</option>
+                        <option value="pro">3 Pro</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
+                        <i class="bi bi-chat-text"></i> 프롬프트
+                    </button>
+                </div>
+                <label class="form-check form-check-inline mb-0 ms-1" style="font-size: 0.85em;" title="Flash 모델용: 이미지에 텍스트 넣지 않음">
                     <input type="checkbox" name="no_text" value="1" class="form-check-input">
                     <span class="form-check-label">한글금지</span>
                 </label>
-                <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <i class="bi bi-chat-text"></i> 프롬프트
-                </button>
             </form>
-            <!-- 전체 이미지 생성 (모델은 프로젝트 설정에서 선택) -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-1">
+            <!-- 전체 이미지 생성 -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-2 ajax-step-form">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
                     <i class="bi bi-images"></i> 이미지
                 </button>
             </form>
             <!-- 전체 TTS 생성 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ms-1">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ms-1 ajax-step-form">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
                     <i class="bi bi-mic"></i> TTS
-                </button>
-            </form>
-            <!-- 이미지 + TTS 동시 실행 -->
-            <form method="post" action="{% url 'pipeline:step_execute_parallel' project.pk %}" class="d-inline ms-2">
-                {% csrf_token %}
-                <input type="hidden" name="steps" value="scene_generator">
-                <input type="hidden" name="steps" value="tts_generator">
-                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <option value="pro">Pro</option>
-                    <option value="flash">Flash</option>
-                </select>
-                <button type="submit" class="btn btn-sm btn-primary" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <i class="bi bi-lightning-fill"></i> 이미지+TTS
                 </button>
             </form>
         </div>
@@ -638,8 +760,11 @@
                                     data-bs-toggle="dropdown" title="모델 선택">
                             </button>
                             <ul class="dropdown-menu dropdown-menu-end">
-                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'pro'); return false;">Pro (고품질)</a></li>
-                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'flash'); return false;">Flash (빠름)</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'pro'); return false;">Gemini Pro ($0.134)</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'flash'); return false;">Gemini Flash ($0.039)</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'flux'); return false;">FLUX.1-schnell ($0.003)</a></li>
+                                <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'sdxl'); return false;">SDXL ($0.005)</a></li>
                             </ul>
                         </div>
                         <button class="btn btn-sm {% if scene.audio %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
@@ -694,22 +819,31 @@
             {% endif %}
         </div>
         <div onclick="event.stopPropagation();">
-            <!-- 앞 4씬 동영상 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_generator' %}" class="d-inline">
+            <!-- 인트로 동영상 (씬 개수 선택) -->
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_generator' %}" class="d-inline ajax-step-form">
                 {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-info">
-                    <i class="bi bi-film"></i> 인트로영상
-                </button>
+                <div class="input-group input-group-sm d-inline-flex" style="width: auto;">
+                    <select name="scene_count" class="form-select form-select-sm" style="width: auto;">
+                        <option value="4" selected>4씬</option>
+                        <option value="6">6씬</option>
+                        <option value="8">8씬</option>
+                        <option value="10">10씬</option>
+                        <option value="12">12씬</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-info">
+                        <i class="bi bi-film"></i> 인트로영상
+                    </button>
+                </div>
             </form>
             <!-- 최종 편집 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_composer' %}" class="d-inline ms-1">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'video_composer' %}" class="d-inline ms-1 ajax-step-form">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-camera-video"></i> 최종편집
                 </button>
             </form>
             <!-- 썸네일 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'thumbnail_generator' %}" class="d-inline ms-1">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'thumbnail_generator' %}" class="d-inline ms-1 ajax-step-form">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-sm btn-outline-warning">
                     <i class="bi bi-card-image"></i> 썸네일
@@ -888,7 +1022,7 @@
     <div class="card-body py-2">
         <div class="row small">
             {% for step_name, exec in step_executions.items %}
-            {% if exec.total_tokens > 0 %}
+            {% if exec.total_tokens > 0 and step_name != 'auto_pipeline' %}
             <div class="col-md-4 col-lg-3 mb-2">
                 <span class="text-muted">{{ exec.step.display_name }}:</span><br>
                 <strong>{{ exec.total_tokens|floatformat:0 }}</strong> 토큰
@@ -943,10 +1077,234 @@
     </div>
 </div>
 
+<!-- 프롬프트 수정 모달 -->
+<div class="modal fade" id="promptModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-sliders"></i> <span id="promptModalTitle">프롬프트 수정</span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info py-2 mb-3">
+                    <i class="bi bi-info-circle"></i>
+                    프롬프트를 수정하면 <strong>내 계정에만</strong> 적용됩니다.
+                    <span id="promptCustomBadge" class="badge bg-success ms-2" style="display: none;">커스텀 사용 중</span>
+                </div>
+                <textarea id="promptContent" class="form-control" rows="25"
+                    style="font-family: monospace; font-size: 0.85em; line-height: 1.6;"></textarea>
+                <input type="hidden" id="promptAgentName" value="">
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-outline-warning" onclick="resetPrompt()">
+                    <i class="bi bi-arrow-counterclockwise"></i> 기본값으로 초기화
+                </button>
+                <div>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                    <button type="button" class="btn btn-primary" onclick="savePrompt()">
+                        <i class="bi bi-save"></i> 저장
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 토스트 컨테이너 -->
+<div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1100;">
+    <div id="stepToast" class="toast align-items-center text-bg-success border-0" role="alert">
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="bi bi-check-circle me-2"></i>
+                <span id="toastMessage">작업이 시작되었습니다.</span>
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
+// 완료 알림음 재생
+function playSuccessSound() {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        // 상쾌한 2음 알림음
+        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+        oscillator.frequency.setValueAtTime(1108.73, audioCtx.currentTime + 0.1); // C#6
+
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.3);
+    } catch (e) {
+        console.log('Audio not supported');
+    }
+}
+
+// 토스트 표시 함수
+function showToast(message, type = 'success') {
+    const toast = document.getElementById('stepToast');
+    const toastMessage = document.getElementById('toastMessage');
+
+    toast.classList.remove('text-bg-success', 'text-bg-danger', 'text-bg-warning');
+    toast.classList.add(`text-bg-${type}`);
+    toastMessage.textContent = message;
+
+    // 성공 시 알림음
+    if (type === 'success') {
+        playSuccessSound();
+    }
+
+    const bsToast = new bootstrap.Toast(toast, { delay: 3000 });
+    bsToast.show();
+}
+
+// AJAX 폼 제출 핸들러
+document.querySelectorAll('.ajax-step-form').forEach(form => {
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const btn = this.querySelector('button[type="submit"]');
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        try {
+            const formData = new FormData(this);
+            const response = await fetch(this.action, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showToast(data.message || '작업이 시작되었습니다.', 'success');
+                // 1초 후 페이지 새로고침하여 작업 목록 업데이트
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(data.message || '실행 실패', 'danger');
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        } catch (error) {
+            // JSON 파싱 실패 = 리다이렉트 응답 (이미 실행 중인 경우)
+            // 페이지 새로고침
+            location.reload();
+        }
+    });
+});
+
+// 작업 취소
+document.querySelectorAll('.btn-cancel-exec').forEach(btn => {
+    btn.addEventListener('click', function() {
+        if (!confirm('작업을 취소하시겠습니까?')) return;
+
+        const projectId = this.dataset.projectId;
+        const execId = this.dataset.execId;
+
+        fetch(`/pipeline/project/${projectId}/progress/${execId}/cancel/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert(data.message || '취소 실패');
+            }
+        })
+        .catch(err => alert('오류: ' + err));
+    });
+});
+
+// 작업 삭제
+document.querySelectorAll('.btn-delete-exec').forEach(btn => {
+    btn.addEventListener('click', function() {
+        if (!confirm('이 작업 기록을 삭제하시겠습니까?')) return;
+
+        const projectId = this.dataset.projectId;
+        const execId = this.dataset.execId;
+
+        fetch(`/pipeline/project/${projectId}/progress/${execId}/delete/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert(data.message || '삭제 실패');
+            }
+        })
+        .catch(err => alert('오류: ' + err));
+    });
+});
+
+// 완료 작업 확인 (acknowledged 처리)
+document.querySelectorAll('.btn-dismiss-exec').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const projectId = this.dataset.projectId;
+        const execId = this.dataset.execId;
+        const item = this.closest('.work-item');
+
+        // 버튼 비활성화
+        this.disabled = true;
+        this.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        fetch(`/pipeline/project/${projectId}/progress/${execId}/acknowledge/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // 항목 숨기기
+                if (item) item.style.display = 'none';
+                // 모든 항목이 숨겨졌으면 카드 전체 숨기기
+                const visibleItems = document.querySelectorAll('.work-item:not([style*="display: none"])');
+                if (visibleItems.length === 0) {
+                    const card = document.getElementById('work-list-card');
+                    if (card) card.style.display = 'none';
+                }
+            } else {
+                alert(data.message || '확인 실패');
+                location.reload();
+            }
+        })
+        .catch(err => {
+            alert('오류: ' + err);
+            location.reload();
+        });
+    });
+});
+
 function updateCharCount() {
     const content = document.getElementById('draft-content');
     if (!content) return;
@@ -1037,8 +1395,14 @@ function previewVideo(url, sceneNumber) {
 
 // 씬 이미지 생성 (개별)
 async function generateSceneImage(sceneNumber, modelType = 'pro') {
-    const modelName = modelType === 'flash' ? 'Flash' : 'Pro';
-    if (!confirm(`씬 ${sceneNumber}의 이미지를 ${modelName} 모델로 생성하시겠습니까?`)) return;
+    const modelNames = {
+        'pro': 'Gemini Pro',
+        'flash': 'Gemini Flash',
+        'flux': 'FLUX.1-schnell',
+        'sdxl': 'SDXL'
+    };
+    const modelName = modelNames[modelType] || modelType;
+    if (!confirm(`씬 ${sceneNumber}의 이미지를 ${modelName}로 생성하시겠습니까?`)) return;
 
     const btn = event.target.closest('.btn-group') || event.target.closest('button');
     const originalHtml = btn.innerHTML;
@@ -1460,5 +1824,214 @@ function copyFullDescription() {
 
 // 초기 글자수 표시
 document.addEventListener('DOMContentLoaded', updateCharCount);
+
+// 수동 자료 글자수 표시
+const manualNotesTextarea = document.getElementById('manual-notes');
+if (manualNotesTextarea) {
+    manualNotesTextarea.addEventListener('input', function() {
+        document.getElementById('manual-notes-count').textContent = this.value.length;
+    });
+}
+
+// 수동 자료 저장
+async function saveManualNotes() {
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 저장 중...';
+
+    const manualNotes = document.getElementById('manual-notes').value;
+
+    try {
+        const formData = new FormData();
+        formData.append('manual_notes', manualNotes);
+
+        const response = await fetch("{% url 'pipeline:research_manual_notes' project.pk %}", {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            btn.innerHTML = '<i class="bi bi-check-lg"></i> 저장됨';
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }, 2000);
+        } else {
+            alert(data.message || '저장 실패');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
+}
+
+// =============================================
+// 프롬프트 관리
+// =============================================
+
+let promptModal = null;
+
+// 프롬프트 모달 열기
+async function openPromptModal(agentName, displayName) {
+    if (!promptModal) {
+        promptModal = new bootstrap.Modal(document.getElementById('promptModal'));
+    }
+
+    document.getElementById('promptModalTitle').textContent = displayName + ' 프롬프트 수정';
+    document.getElementById('promptAgentName').value = agentName;
+    document.getElementById('promptContent').value = '로딩 중...';
+    document.getElementById('promptCustomBadge').style.display = 'none';
+
+    promptModal.show();
+
+    // 프롬프트 불러오기
+    try {
+        const response = await fetch(`/pipeline/prompt/${agentName}/`, {
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            document.getElementById('promptContent').value = data.content || '';
+            if (data.is_custom) {
+                document.getElementById('promptCustomBadge').style.display = 'inline';
+            }
+        } else {
+            alert(data.message || '프롬프트 로딩 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// 프롬프트 저장
+async function savePrompt() {
+    const agentName = document.getElementById('promptAgentName').value;
+    const content = document.getElementById('promptContent').value;
+
+    if (!content.trim()) {
+        alert('프롬프트 내용을 입력해주세요.');
+        return;
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('content', content);
+
+        const response = await fetch(`/pipeline/prompt/${agentName}/`, {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('프롬프트가 저장되었습니다.');
+            document.getElementById('promptCustomBadge').style.display = 'inline';
+        } else {
+            alert(data.message || '저장 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+// 프롬프트 초기화
+async function resetPrompt() {
+    if (!confirm('프롬프트를 기본값으로 초기화하시겠습니까?\n저장한 커스텀 프롬프트가 삭제됩니다.')) return;
+
+    const agentName = document.getElementById('promptAgentName').value;
+
+    try {
+        const response = await fetch(`/pipeline/prompt/${agentName}/reset/`, {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert(data.message);
+            document.getElementById('promptCustomBadge').style.display = 'none';
+            // 기본 프롬프트 다시 불러오기
+            openPromptModal(agentName, document.getElementById('promptModalTitle').textContent.replace(' 프롬프트 수정', ''));
+        } else {
+            alert(data.message || '초기화 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
 </script>
+
+<!-- 자동 생성 모달 -->
+<div class="modal fade" id="autoPipelineModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-lightning-fill"></i> 자동 생성 설정</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <p class="text-muted small">리서치 → 대본 → 씬분할 → 이미지 프롬프트 → 이미지 생성까지 자동 실행됩니다.</p>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">리서치</label>
+                        <select name="model_researcher" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">대본 작성</label>
+                        <select name="model_script_writer" class="form-select form-select-sm">
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro" selected>2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">씬 분할</label>
+                        <select name="model_scene_planner" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">이미지 프롬프트</label>
+                        <select name="model_image_prompter" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-lightning-fill"></i> 자동 생성 시작
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 {% endblock %}

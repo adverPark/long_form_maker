@@ -16,16 +16,16 @@ class ImagePrompterService(BaseStepService):
 
     agent_name = 'image_prompter'
 
-    # 캐릭터 설명 (일관성 유지)
-    CHARACTER_DESC = "simple webtoon style mascot character, curly black hair, round glasses, blue shirt"
-
     def execute(self):
         self.update_progress(5, '씬 로딩 중...')
 
-        # 한글금지 옵션 확인 (체크박스 또는 Flash 모델 설정)
+        # 한글금지 옵션 확인 (체크박스 또는 텍스트 렌더링 불가 모델)
         no_text_option = self.execution.intermediate_data.get('no_text', False) if self.execution.intermediate_data else False
-        flash_model = getattr(self.project, 'image_model', 'gemini-3-pro') == 'gemini-2.5-flash'
-        self.use_no_text = no_text_option or flash_model
+        image_model = getattr(self.project, 'image_model', 'gemini-3-pro')
+        # Flash, FLUX, SDXL 등 텍스트 렌더링이 안 되는 모델들
+        no_text_models = ['gemini-2.5-flash', 'flux-schnell', 'sdxl']
+        no_text_model = image_model in no_text_models
+        self.use_no_text = no_text_option or no_text_model
 
         if self.use_no_text:
             self.log('이미지 프롬프트 작성 시작 (한글금지 모드 - 텍스트 제외)')
@@ -41,9 +41,22 @@ class ImagePrompterService(BaseStepService):
         total = len(all_scenes)
         self.log(f'총 {total}개 씬 로드')
 
+        # 나레이션 검증 - 비어있으면 진행 불가
+        scenes_without_narration = [s for s in all_scenes if not s.narration]
+        if scenes_without_narration:
+            empty_count = len(scenes_without_narration)
+            self.log(f'나레이션 없는 씬: {empty_count}개', 'error')
+            if empty_count == total:
+                raise ValueError('모든 씬의 나레이션이 비어있습니다. 씬 분할을 다시 실행해주세요.')
+            else:
+                self.log(f'⚠️ {empty_count}개 씬의 나레이션이 비어있어 해당 씬은 건너뜁니다', 'warning')
+
         # 프롬프트가 필요한 씬만 필터링 (비어있거나 PLACEHOLDER이거나 너무 짧은 것)
+        # 나레이션 없는 씬은 제외
         scenes_to_process = []
         for scene in all_scenes:
+            if not scene.narration:
+                continue  # 나레이션 없으면 건너뜀
             prompt = scene.image_prompt or ''
             if not prompt or prompt == '[PLACEHOLDER]' or len(prompt.split()) < 15:
                 scenes_to_process.append(scene)
@@ -105,14 +118,13 @@ class ImagePrompterService(BaseStepService):
         """Pro 모델용 프롬프트 (한글 텍스트 포함)"""
         return """# 이미지 프롬프트 작성 전문가
 
-대본(narration)을 분석하여 뉴스/다큐멘터리 스타일의 디테일한 이미지 프롬프트를 작성합니다.
+대본(narration)을 분석하여 상황을 아주 디테일하게 묘사하는 이미지 프롬프트를 작성합니다.
 
 ## 핵심 원칙
 
-🎨 스타일:
-- 주인공 캐릭터만: 심플한 웹툰 스타일 (curly black hair, round glasses, blue shirt)
-- 나머지 전부: photorealistic + vibrant colors
 - 대본 내용이 이미지만 봐도 이해되어야 함
+- 캐릭터/스타일은 별도 참조 이미지로 제공됨 → 프롬프트에 캐릭터 외모 설명 넣지 말 것!
+- 상황, 배경, 분위기, 감정을 디테일하게 묘사
 - 컬러풀하게! 밋밋한 색상 금지
 
 ## 씬 유형별 공식
@@ -127,7 +139,7 @@ class ImagePrompterService(BaseStepService):
 "Historical documentary style, [시대]. Era: [날짜]. Setting: [장소]. Key visual: [핵심 이미지]. Style: vintage documentary, historical footage look. Color: [세피아/필름톤]."
 
 ### 4. 캐릭터 등장 씬 (has_character: true)
-"Character as documentary narrator. Character: simple webtoon style mascot, curly black hair, round glasses, blue shirt. Expression: [표정]. Pose: [포즈]. Background: photorealistic [대본 내용 배경], vibrant colors. Style: webtoon character + photorealistic colorful background."
+"Character as narrator (참조 이미지 제공됨). Expression: [표정]. Pose: [포즈]. Action: [동작]. Background: photorealistic [대본 내용에 맞는 배경], vibrant colors. Mood: [분위기]."
 
 ### 5. 개념/추상 설명 씬
 "Conceptual visualization of [개념]. Visual metaphor: [비유]. Key elements: [구성요소]. Style: clean conceptual illustration, documentary quality. Color: [색상]. Dramatic lighting."
@@ -143,62 +155,58 @@ class ImagePrompterService(BaseStepService):
 ## 중요!
 - 최소 30단어, 권장 50-80단어
 - 영어로 작성
-- 추상적/모호한 표현 금지
-- 대본 내용이 구체적으로 표현되어야 함"""
+- ❌ 캐릭터 외모 설명 금지 (이미지로 제공됨)
+- ✅ 상황/배경/분위기/감정/동작 묘사에 집중
+- 추상적/모호한 표현 금지"""
 
     def _get_flash_prompt(self) -> str:
-        """Flash 모델용 프롬프트 (한글 텍스트 완전 제외)"""
+        """Flash/Replicate 모델용 프롬프트 (텍스트 완전 제외)"""
         return """# 이미지 프롬프트 작성 전문가 (NO TEXT MODE)
 
-대본(narration)을 분석하여 뉴스/다큐멘터리 스타일의 디테일한 이미지 프롬프트를 작성합니다.
+대본(narration)을 분석하여 상황을 아주 디테일하게 묘사하는 이미지 프롬프트를 작성합니다.
 
 ## 🚨 중요: 텍스트 없는 이미지 전용
 
-이 이미지는 Flash 모델로 생성됩니다. Flash 모델은 텍스트 렌더링이 불안정합니다.
-
 **절대 금지:**
-- ❌ 한글 텍스트 (Korean text)
-- ❌ 영어 텍스트 (English text)
-- ❌ 숫자 텍스트 (numbers as text in image)
+- ❌ 한글/영어 텍스트
+- ❌ 숫자 텍스트
 - ❌ "text showing...", "text saying..." 표현
-- ❌ 인포그래픽에 글씨 넣기
+- ❌ 캐릭터 외모 설명 (이미지로 제공됨)
 
 **대신 사용:**
 - ✅ 시각적 메타포 (그래프 모양, 화살표 방향)
 - ✅ 색상으로 감정 표현 (빨강=위기, 초록=성장)
-- ✅ 아이콘/심볼 (달러 기호 모양, 집 모양 등)
-- ✅ 실제 장면 묘사 (사람, 건물, 상황)
+- ✅ 상황/배경/분위기/감정/동작 묘사
 
 ## 씬 유형별 공식
 
-### 1. 데이터/통계 씬 (숫자 있는 대본)
-"Colorful infographic visualization. Main visual: [3D 차트/그래프 모양]. Rising/falling bars/arrows showing [상승/하락]. NO TEXT. Color scheme: [감정 색상]. Clean modern style with visual hierarchy."
+### 1. 데이터/통계 씬
+"Colorful infographic visualization. Main visual: [3D 차트/그래프 모양]. Rising/falling bars/arrows. NO TEXT. Color scheme: [감정 색상]. Clean modern style."
 
 ### 2. 현장/실제 상황 씬
-"Colorful realistic scene of [장소]. Setting: [구체적 환경]. Main subject: [피사체]. [상태/동작]. Style: photorealistic with vibrant color grading, cinematic quality. [조명]. NO TEXT."
+"Colorful realistic scene of [장소]. Setting: [구체적 환경]. Main subject: [피사체]. [상태/동작]. Style: photorealistic, cinematic quality. [조명]. NO TEXT."
 
 ### 3. 역사/과거 사건 씬
-"Historical documentary style, [시대]. Setting: [장소]. Key visual: [핵심 이미지]. Style: vintage documentary, historical footage look. Sepia/film grain. NO TEXT."
+"Historical documentary style, [시대]. Setting: [장소]. Key visual: [핵심 이미지]. Sepia/film grain. NO TEXT."
 
 ### 4. 캐릭터 등장 씬 (has_character: true)
-"Character as narrator. Character: simple webtoon style mascot, curly black hair, round glasses, blue shirt. Expression: [표정]. Pose: [포즈]. Background: photorealistic [배경], vibrant colors. NO TEXT."
+"Character as narrator (참조 이미지 제공됨). Expression: [표정]. Pose: [포즈]. Action: [동작]. Background: [배경], vibrant colors. Mood: [분위기]. NO TEXT."
 
 ### 5. 개념/추상 설명 씬
-"Conceptual visualization of [개념]. Visual metaphor: [비유 - 구체적 오브젝트로]. Key elements: [구성요소]. Style: clean conceptual illustration. Color: [색상]. Dramatic lighting. NO TEXT."
+"Conceptual visualization of [개념]. Visual metaphor: [비유]. Key elements: [구성요소]. Color: [색상]. Dramatic lighting. NO TEXT."
 
 ## 색상으로 의미 전달
-- 위기/하락/경고: 빨강, 어두운 톤
-- 성장/상승/희망: 초록, 밝은 톤
-- 분석/설명/중립: 파랑, 차분한 톤
-- 주의/변화: 주황
-- 역사/과거: 세피아, 빈티지
+- 위기/하락: 빨강, 어두운 톤
+- 성장/희망: 초록, 밝은 톤
+- 분석/중립: 파랑
+- 역사/과거: 세피아
 
 ## 중요!
 - 최소 30단어, 권장 50-80단어
 - 영어로 작성
 - **NO TEXT IN IMAGE** 필수
-- 텍스트 대신 시각적 요소로 대본 내용 표현
-- 추상적/모호한 표현 금지"""
+- ❌ 캐릭터 외모 설명 금지
+- ✅ 상황/배경/분위기/감정/동작 묘사에 집중"""
 
     def _generate_batch_prompts(self, batch: list, system_prompt: str) -> list:
         """배치로 프롬프트 생성"""

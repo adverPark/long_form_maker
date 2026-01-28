@@ -134,11 +134,17 @@ def set_default_api_key(request, pk):
 def set_gemini_model(request):
     """Gemini 모델 설정"""
     model = request.POST.get('gemini_model')
-    if model in ['flash', 'pro']:
+    valid_models = ['2.5-flash', '2.5-pro', 'flash', 'pro']
+    model_names = {
+        '2.5-flash': 'Gemini 2.5 Flash',
+        '2.5-pro': 'Gemini 2.5 Pro',
+        'flash': 'Gemini 3 Flash',
+        'pro': 'Gemini 3 Pro',
+    }
+    if model in valid_models:
         request.user.gemini_model = model
         request.user.save(update_fields=['gemini_model'])
-        model_name = 'Gemini 3 Flash' if model == 'flash' else 'Gemini 3 Pro'
-        messages.success(request, f'{model_name}으로 변경되었습니다.')
+        messages.success(request, f'{model_names[model]}으로 변경되었습니다.')
     return redirect('accounts:settings')
 
 
