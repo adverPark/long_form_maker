@@ -18,3 +18,18 @@ def divisibleby(value, divisor):
         return value / divisor
     except (ValueError, TypeError, ZeroDivisionError):
         return value
+
+
+@register.filter
+def format_number(value):
+    """숫자를 K, M 단위로 포맷 (예: 1900 -> 1.9K)"""
+    try:
+        value = int(value)
+        if value >= 1000000:
+            return f'{value/1000000:.1f}M'
+        elif value >= 1000:
+            return f'{value/1000:.1f}K'
+        else:
+            return str(value)
+    except (ValueError, TypeError):
+        return value

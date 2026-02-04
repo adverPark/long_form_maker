@@ -8,6 +8,8 @@ class PipelineStep(models.Model):
     """파이프라인 단계 정의"""
     STEP_CHOICES = [
         ('topic_finder', '주제 찾기'),
+        ('youtube_collector', 'YouTube 수집'),
+        ('content_analyzer', '콘텐츠 분석'),
         ('researcher', '리서치'),
         ('script_writer', '대본 작성'),
         ('scene_planner', '씬 분할'),
@@ -174,6 +176,17 @@ class Research(models.Model):
     transcript = models.TextField(blank=True, verbose_name="자막 원본")
     summary = models.TextField(blank=True, verbose_name="요약")
 
+    # YouTube 자막 메타데이터
+    transcript_language = models.CharField(max_length=10, blank=True, verbose_name="자막 언어")
+    transcript_is_auto = models.BooleanField(default=False, verbose_name="자동생성 자막 여부")
+
+    # 콘텐츠 분석 결과 (content_analyzer에서 생성)
+    content_analysis = models.JSONField(default=dict, blank=True, verbose_name="콘텐츠 분석",
+        help_text="summary, key_topics, viewer_interests, highlight_comments, draft_outline, research_keywords 등")
+
+    # 타겟 리서치 키워드 (content_analyzer에서 추출)
+    target_keywords = models.JSONField(default=list, blank=True, verbose_name="리서치 키워드")
+
     # 제목 관련
     title_candidates = models.JSONField(default=list, verbose_name="제목 후보")
     # best_title: {"title": "...", "pattern": "인용구형", "hook": "..."}
@@ -230,6 +243,26 @@ class Research(models.Model):
 
     def __str__(self):
         return f"{self.project.name} 리서치"
+
+
+class YouTubeComment(models.Model):
+    """YouTube 댓글"""
+    research = models.ForeignKey(Research, on_delete=models.CASCADE, related_name='youtube_comments')
+    comment_id = models.CharField(max_length=50, verbose_name="댓글 ID")
+    author = models.CharField(max_length=100, verbose_name="작성자")
+    text = models.TextField(verbose_name="댓글 내용")
+    like_count = models.IntegerField(default=0, verbose_name="좋아요 수")
+    reply_count = models.IntegerField(default=0, verbose_name="답글 수")
+    published_at = models.DateTimeField(null=True, blank=True, verbose_name="작성일")
+    is_highlighted = models.BooleanField(default=False, verbose_name="주요 댓글")
+
+    class Meta:
+        verbose_name = "YouTube 댓글"
+        verbose_name_plural = "YouTube 댓글"
+        ordering = ['-like_count']
+
+    def __str__(self):
+        return f"{self.author}: {self.text[:50]}"
 
 
 class Draft(models.Model):

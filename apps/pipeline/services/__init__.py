@@ -1,5 +1,9 @@
 from .base import BaseStepService
 from .topic_finder import TopicFinderService
+from .youtube_collector import YouTubeCollectorService
+from .transcript_analyzer import TranscriptAnalyzerService
+from .comment_analyzer import CommentAnalyzerService
+from .script_planner import ScriptPlannerService
 from .researcher import ResearcherService
 from .script_writer import ScriptWriterService
 from .scene_planner import ScenePlannerService
@@ -14,6 +18,10 @@ from .auto_pipeline import AutoPipelineService
 # 에이전트 이름 -> 서비스 클래스 매핑
 SERVICE_REGISTRY = {
     'topic_finder': TopicFinderService,
+    'youtube_collector': YouTubeCollectorService,
+    'transcript_analyzer': TranscriptAnalyzerService,
+    'comment_analyzer': CommentAnalyzerService,
+    'script_planner': ScriptPlannerService,
     'researcher': ResearcherService,
     'script_writer': ScriptWriterService,
     'scene_planner': ScenePlannerService,

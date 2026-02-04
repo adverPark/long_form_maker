@@ -6,6 +6,10 @@ class AgentPrompt(models.Model):
     """에이전트별 프롬프트 관리"""
     AGENT_CHOICES = [
         ('topic_finder', 'Topic Finder'),
+        ('youtube_collector', 'YouTube Collector'),
+        ('transcript_analyzer', 'Transcript Analyzer'),
+        ('comment_analyzer', 'Comment Analyzer'),
+        ('script_planner', 'Script Planner'),
         ('researcher', 'Researcher'),
         ('script_writer', 'Script Writer'),
         ('scene_planner', 'Scene Planner'),

@@ -4,7 +4,7 @@ Django production settings - 프로덕션 서버용
 import os
 from .base import *
 
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')
 

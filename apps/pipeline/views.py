@@ -10,7 +10,8 @@ from django.http import JsonResponse, FileResponse, Http404
 from django.views.decorators.http import require_POST
 from .models import (
     Project, PipelineStep, StepExecution, Topic, Research, Draft, Scene,
-    ImageStylePreset, CharacterPreset, VoicePreset, ThumbnailStylePreset, UploadInfo
+    ImageStylePreset, CharacterPreset, VoicePreset, ThumbnailStylePreset, UploadInfo,
+    YouTubeComment
 )
 from .services import get_service_class
 from apps.accounts.models import APIKey
@@ -373,6 +374,8 @@ def auto_pipeline(request, pk):
 
     # 모델 선택 가져오기
     model_settings = {
+        'youtube_collector': None,  # 모델 사용 안함
+        'content_analyzer': request.POST.get('model_content_analyzer', '2.5-flash'),
         'researcher': request.POST.get('model_researcher', '2.5-flash'),
         'script_writer': request.POST.get('model_script_writer', '2.5-pro'),
         'scene_planner': request.POST.get('model_scene_planner', '2.5-flash'),
@@ -1508,6 +1511,19 @@ Korean text must be clearly readable with bold font and high contrast."""
                     logger.info(f'[Thumbnail] Project {pk}: part {i} - inline_data 없음, type={type(part)}')
         else:
             logger.warning(f'[Thumbnail] Project {pk}: candidates 없음, response={response}')
+            # 차단 이유 확인
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                block_reason = getattr(response.prompt_feedback, 'block_reason', None)
+                if block_reason:
+                    block_reasons = {
+                        'SAFETY': '안전 정책 위반 (폭력/성인/혐오 등)',
+                        'OTHER': '정책 위반 (실존 인물/저작권/정치인 등)',
+                        'BLOCKLIST': '금지어 포함',
+                        'PROHIBITED_CONTENT': '금지된 콘텐츠',
+                    }
+                    reason_str = str(block_reason).split('.')[-1] if '.' in str(block_reason) else str(block_reason)
+                    reason_msg = block_reasons.get(reason_str, reason_str)
+                    return JsonResponse({'success': False, 'message': f'Gemini 차단: {reason_msg}'})
 
         return JsonResponse({'success': False, 'message': '썸네일 생성 실패 - 이미지 없음'})
 
@@ -1612,12 +1628,21 @@ def _get_default_prompt(agent_name: str) -> str:
         from apps.pipeline.services.script_writer import ScriptWriterService
         return ScriptWriterService.DEFAULT_PROMPT
     elif agent_name == 'researcher':
-        from apps.pipeline.services.researcher import RESEARCHER_SYSTEM_PROMPT
-        return RESEARCHER_SYSTEM_PROMPT
+        from apps.pipeline.services.researcher import ResearcherService
+        return ResearcherService.DEFAULT_PROMPT
     elif agent_name == 'scene_planner':
         from apps.pipeline.services.scene_planner import ScenePlannerService
         return ScenePlannerService.DEFAULT_PROMPT
     elif agent_name == 'image_prompter':
         from apps.pipeline.services.image_prompter import ImagePrompterService
         return getattr(ImagePrompterService, 'DEFAULT_PROMPT', '')
+    elif agent_name == 'transcript_analyzer':
+        from apps.pipeline.services.transcript_analyzer import TranscriptAnalyzerService
+        return TranscriptAnalyzerService.DEFAULT_PROMPT
+    elif agent_name == 'comment_analyzer':
+        from apps.pipeline.services.comment_analyzer import CommentAnalyzerService
+        return CommentAnalyzerService.DEFAULT_PROMPT
+    elif agent_name == 'script_planner':
+        from apps.pipeline.services.script_planner import ScriptPlannerService
+        return ScriptPlannerService.DEFAULT_PROMPT
     return ''

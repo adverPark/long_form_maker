@@ -1,137 +1,55 @@
-import json
-import re
 import time
+from datetime import date
 from google.genai import types
 from .base import BaseStepService
 from apps.pipeline.models import Research
 
 
-# 에이전트 시스템 프롬프트
-RESEARCHER_SYSTEM_PROMPT = """# 리서처 (자료 수집 전문가)
-
-당신은 **터지는 영상을 만들기 위한 재료**를 수집하는 전문가입니다.
-
-## 핵심 원칙
-
-```
-단순 정보 수집 ❌
-시청자 감정을 건드리고 호기심을 자극하는 재료 ✅
-```
-
-## search_web 도구 사용법
-
-필요한 정보가 부족하면 search_web 도구를 호출하세요.
-한 번에 모든 정보가 나오지 않으면, 다른 검색어로 여러 번 검색하세요.
-
-### 검색 키워드 예시
-- "[주제] 2025 통계"
-- "[주제] 폐업률 역대"
-- "[주제] 인터뷰 한탄"
-- "[주제] 사장 '버틸 수가 없다'"
-- "[주제] 전문가 전망"
-- "[주제] 2010년 vs 2025년"
-
-## 찾아야 할 것
-
-### 1. 충격적 인용구 (3개 이상 필수!)
-- "30년 일했는데 하루아침에 쓸모없어졌어요"
-- "월 500 벌다가 지금은 50도 안 돼요"
-- 검색어: "[주제] 인터뷰", "[주제] 사장 발언", "[주제] 한탄"
-
-### 2. 충격적 숫자/통계 (10개 이상!)
-- "87년 역사에서 처음으로"
-- "15년 만에 15배"
-- 검색어: "[주제] 통계 2025", "[주제] 역대 최초", "[주제] 몇 년 만에"
-
-### 3. 시간 변화 스토리 (과거 vs 현재)
-- [과거 숫자] → [변화 시점] → [현재 숫자]
-- 검색어: "[주제] 2010년 vs 2025년", "[주제] 황금기 몰락"
-
-### 4. 인물 스토리 (2개 이상!)
-- "30년 경력 정비사 김철수 씨(55)"
-- 검색어: "[주제] 사장 인터뷰", "[업종] 경력 폐업"
-
-### 5. 역설/반전 요소
-- "열심히 안 해서 망한게 아니에요. 성실한 업종부터 무너져요."
-- 검색어: "[주제] 역설", "[주제] 의외"
-
-### 6. 시청자 연결
-- "5년 뒤 여러분이 차 살 때..."
-- "이 산업 망하면 일자리 100만개 사라져요"
-
-## 필수 체크리스트 (충족될 때까지 검색!)
-
-- [ ] 인용구 3개 이상
-- [ ] 숫자 10개 이상
-- [ ] 시간 변화 (과거→현재)
-- [ ] 인물 사례 2개 이상
-- [ ] 역설 요소 1개 이상
-- [ ] 시청자 연결
-
-## 완료 조건
-
-위 체크리스트가 모두 충족되면, 아래 JSON 형식으로 최종 결과를 출력하세요.
-부족한 항목이 있으면 추가 검색을 해주세요.
-
-```json
-{
-    "topic": "주제",
-    "title_candidates": ["제목1", "제목2", "제목3", "제목4", "제목5"],
-    "best_title": {
-        "title": "가장 좋은 제목",
-        "pattern": "인용구형/숫자형/질문형",
-        "hook": "영상 시작 첫 문장"
-    },
-    "quotes": [
-        {"quote": "인용문", "source": "누구", "emotion": "한탄/충격/분노", "usable_for": "인트로/본문"}
-    ],
-    "numbers": [
-        {"number": "숫자", "context": "맥락", "impact": "충격 포인트"}
-    ],
-    "time_change": {
-        "past": {"year": "시점", "situation": "상황", "numbers": "수치"},
-        "turning_point": {"year": "시점", "event": "사건", "impact": "영향"},
-        "present": {"year": "시점", "situation": "상황", "numbers": "수치"}
-    },
-    "person_stories": [
-        {"name": "이름", "age": "나이", "career": "경력", "past": "과거", "present": "현재", "quote": "발언", "emotion": "감정"}
-    ],
-    "paradox": {
-        "common_belief": "일반적 믿음",
-        "reality": "실제 현실",
-        "insight": "통찰"
-    },
-    "viewer_connection": {
-        "direct_impact": "직접적 영향",
-        "indirect_impact": "간접적 영향",
-        "self_check": "시청자에게 던지는 질문"
-    },
-    "narrative_structure": {
-        "intro": {"hook": "첫 문장", "setup": "상황 설정"},
-        "act1": {"title": "1막", "points": ["포인트1", "포인트2"]},
-        "act2": {"title": "2막", "points": ["포인트1", "포인트2"]},
-        "act3": {"title": "3막", "points": ["포인트1", "포인트2"]},
-        "conclusion": {"summary": "핵심 메시지", "cta": "행동 유도"}
-    },
-    "sources": [
-        {"title": "기사 제목", "url": "URL", "publisher": "출처", "key_info": "핵심 정보"}
-    ]
-}
-```
-
-JSON만 출력하세요. 다른 텍스트 없이."""
-
-
 class ResearcherService(BaseStepService):
-    """리서치 에이전트 - Function Calling으로 자율 검색
+    """리서치 에이전트 - 대본 계획의 리서치 필요 항목을 조사
 
-    특징:
-    - Gemini가 필요할 때 search_web 도구 호출
-    - 중간 저장으로 이어하기 지원
-    - 오류 시 30초 대기 후 3회 재시도
+    워크플로:
+    1. YouTube 수집 → 2. 자막 분석 → 3. 댓글 분석 → 4. 대본 계획 → 5. 리서치
+
+    대본 계획에서 도출된 '리서치 필요 항목'을 하나씩 검색하여 조사합니다.
     """
 
     agent_name = 'researcher'
+
+    DEFAULT_PROMPT = """당신은 유튜브 콘텐츠 제작을 위한 리서치 전문가입니다.
+
+## 🚨 핵심 원칙: 최신 정보!
+
+- **오늘 날짜: {today}**
+- 반드시 **가장 최신 자료**를 찾아주세요
+- 검색할 때 "{year}" 또는 "최신"을 키워드에 포함하세요
+- **수치/통계를 인용할 때는 반드시 연도를 명시**하세요
+  - ❌ "폐업률이 30%에 달한다"
+  - ✅ "2024년 기준 폐업률이 30%에 달한다" 또는 "2025년 1분기 폐업률이..."
+- 최신 자료를 구하지 못한 경우, 해당 수치가 몇 년도 자료인지 반드시 표기하세요
+
+## 조사 방법
+1. 리서치 필요 항목을 확인합니다
+2. 각 항목에 대해 search_web 도구로 검색합니다 (최신 자료 우선!)
+3. 검색 결과를 정리하여 Markdown 형식으로 출력합니다
+
+## 출력 형식 (Markdown)
+
+# 리서치 결과
+
+## 1. [첫 번째 항목]
+- 조사 내용 (수치는 연도 명시!)
+- 출처: [URL]
+
+## 2. [두 번째 항목]
+- 조사 내용
+- 출처: [URL]
+
+(이하 동일)
+
+---
+
+모든 항목을 조사한 후 결과를 출력해주세요."""
 
     # 재시도 설정
     MAX_RETRIES = 3
@@ -143,58 +61,44 @@ class ResearcherService(BaseStepService):
         self._all_sources = []
 
     def execute(self):
-        self.update_progress(5, '리서치 에이전트 시작...')
+        self.update_progress(5, '리서치 시작...')
 
-        # 입력 확인 (Topic 모델 또는 수동 입력)
-        manual_input = self.get_manual_input()
+        # 대본 계획 확인 (필수)
+        if not hasattr(self.project, 'research') or not self.project.research:
+            raise ValueError('먼저 대본 계획을 실행해주세요.')
 
-        topic_title = None
-        source_url = ''
+        content_analysis = self.project.research.content_analysis or {}
+        script_plan = content_analysis.get('script_plan', '')
 
-        if manual_input:
-            topic_title = manual_input.strip()
-        elif hasattr(self.project, 'topic') and self.project.topic:
+        if not script_plan:
+            raise ValueError('대본 계획이 없습니다. 먼저 5. 대본 계획을 실행해주세요.')
+
+        # 주제 정보
+        topic_title = ''
+        if hasattr(self.project, 'topic') and self.project.topic:
             topic_title = self.project.topic.title
-            source_url = self.project.topic.url or ''
 
-        if not topic_title:
-            raise ValueError('리서치할 주제를 입력해주세요.')
+        self.log('대본 계획 기반 리서치 시작', 'info')
 
         # 중간 데이터 복원
         self._restore_intermediate_data()
 
-        self.log(f'주제: {topic_title}', 'info')
         if self._search_count > 0:
             self.log(f'이전 검색 {self._search_count}개 복원됨', 'info')
 
-        self.update_progress(10, f'"{topic_title}" 리서치 중...')
+        self.update_progress(10, '리서치 필요 항목 조사 중...')
 
         # 에이전트 실행
-        result = self._run_agent(topic_title)
+        result_text = self._run_agent(script_plan)
 
-        # 결과 검증 - 필수 항목 체크
-        if not result.get('quotes') and not result.get('numbers'):
-            raise ValueError(
-                f'리서치 결과가 불충분합니다. '
-                f'검색 {self._search_count}회 수행했으나 인용구/숫자 데이터가 없습니다. '
-                f'다시 실행해주세요.'
-            )
-
-        # DB에 저장
+        # DB에 저장 (Markdown 텍스트로)
         self.update_progress(95, '결과 저장 중...')
-        self._save_research(topic_title, source_url, result)
+        self._save_research(topic_title, result_text)
 
-        # 중간 데이터 정리 (완료됐으므로)
+        # 중간 데이터 정리
         self._clear_intermediate_data()
 
-        # 결과 요약 로그
-        self.log(
-            f'리서치 완료: 인용구 {len(result.get("quotes", []))}개, '
-            f'숫자 {len(result.get("numbers", []))}개, '
-            f'인물 {len(result.get("person_stories", []))}개',
-            'result'
-        )
-
+        self.log(f'리서치 완료 (검색 {self._search_count}회)', 'result')
         self.update_progress(100, f'리서치 완료 (검색 {self._search_count}회)')
 
     def _restore_intermediate_data(self):
@@ -351,21 +255,28 @@ class ResearcherService(BaseStepService):
 
         raise last_error
 
-    def _run_agent(self, topic: str) -> dict:
-        """에이전트 루프 실행"""
+    def _run_agent(self, script_plan: str) -> str:
+        """에이전트 루프 실행 - 대본 계획 기반 리서치
+
+        Args:
+            script_plan: 대본 계획 (리서치 필요 항목 포함)
+
+        Returns:
+            리서치 결과 (Markdown 텍스트)
+        """
         client = self.get_client()
         model_name = self.get_model_name()
 
         # 검색 도구 정의
         search_tool_declaration = types.FunctionDeclaration(
             name="search_web",
-            description="웹에서 정보를 검색합니다. 인용구, 통계, 사례 등을 찾을 때 사용하세요.",
+            description="웹에서 정보를 검색합니다. 리서치 필요 항목을 조사할 때 사용하세요.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "검색할 내용 (예: '자영업 폐업률 2025 통계', '카센터 사장 인터뷰 한탄')"
+                        "description": "검색할 내용"
                     }
                 },
                 "required": ["query"]
@@ -375,13 +286,15 @@ class ResearcherService(BaseStepService):
         # 이전 검색 컨텍스트
         previous_context = self._get_previous_context()
 
-        # 대화 시작 - types.Content 형식 사용
-        user_message = f"""주제: {topic}
+        user_message = f"""## 대본 계획
 
-이 주제에 대해 터지는 유튜브 영상을 만들기 위한 자료를 수집해주세요.
-search_web 도구로 필요한 정보를 검색하세요.
+{script_plan}
 
-필수 체크리스트가 모두 충족될 때까지 검색하고, 완료되면 JSON 형식으로 결과를 출력하세요.
+---
+
+위 대본 계획을 보고, **리서치 필요 항목**을 이해한 후 하나씩 모두 조사해주세요.
+
+search_web 도구로 각 항목을 검색하고, 완료되면 Markdown 형식으로 결과를 정리해주세요.
 {previous_context}"""
 
         contents = [
@@ -391,9 +304,14 @@ search_web 도구로 필요한 정보를 검색하세요.
             )
         ]
 
-        # 설정
+        # 설정 - 오늘 날짜 주입
+        today = date.today()
+        system_prompt = self.DEFAULT_PROMPT.format(
+            today=today.strftime('%Y년 %m월 %d일'),
+            year=today.year
+        )
         config = types.GenerateContentConfig(
-            system_instruction=RESEARCHER_SYSTEM_PROMPT,
+            system_instruction=system_prompt,
             tools=[types.Tool(function_declarations=[search_tool_declaration])]
         )
 
@@ -409,8 +327,7 @@ search_web 도구로 필요한 정보를 검색하세요.
                 )
             except Exception as e:
                 self.log(f'API 최종 실패: {str(e)}', 'error')
-                # 중간 결과라도 반환
-                return self._build_partial_result(topic)
+                return self._build_partial_result()
 
             # 응답 처리
             if not response.candidates:
@@ -458,59 +375,38 @@ search_web 도구로 필요한 정보를 검색하세요.
                 )
 
             else:
-                # 텍스트 응답 (최종 결과)
+                # 텍스트 응답 (최종 결과 - Markdown)
                 if text_response:
                     self.log('최종 결과 수신', 'result')
-                    return self._parse_result(text_response)
+                    return text_response
                 break
 
         self.log(f'루프 종료 (검색 {self._search_count}회)', 'info')
-        return self._build_partial_result(topic)
+        return self._build_partial_result()
 
-    def _build_partial_result(self, topic: str) -> dict:
-        """중간 결과로 부분 결과 생성"""
+    def _build_partial_result(self) -> str:
+        """중간 검색 결과를 Markdown으로 정리"""
         self.log('부분 결과 생성 중...', 'info')
 
-        # 중간 저장된 검색 결과들을 모아서 기본 구조 반환
-        return {
-            'topic': topic,
-            'title_candidates': [],
-            'best_title': {},
-            'quotes': [],
-            'numbers': [],
-            'time_change': {},
-            'person_stories': [],
-            'paradox': {},
-            'viewer_connection': {},
-            'narrative_structure': {},
-            'sources': []
-        }
+        intermediate = self.execution.intermediate_data or {}
+        searches = intermediate.get('searches', [])
 
-    def _parse_result(self, text: str) -> dict:
-        """JSON 결과 파싱"""
-        try:
-            # JSON 블록 추출
-            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', text)
-            if json_match:
-                return json.loads(json_match.group(1))
+        if not searches:
+            return "# 리서치 결과\n\n검색 결과가 없습니다."
 
-            # 그냥 JSON
-            json_match = re.search(r'\{[\s\S]*\}', text)
-            if json_match:
-                return json.loads(json_match.group())
+        result = "# 리서치 결과 (부분)\n\n"
+        for i, search in enumerate(searches, 1):
+            result += f"## {i}. {search.get('query', '')}\n\n"
+            result += search.get('summary', '') + "\n\n"
 
-        except json.JSONDecodeError as e:
-            self.log(f'JSON 파싱 실패: {str(e)}', 'error')
+        return result
 
-        return {}
-
-    def _save_research(self, topic: str, source_url: str, result: dict):
-        """Research 모델에 저장"""
+    def _save_research(self, topic_title: str, result_text: str):
+        """Research 모델에 리서치 결과 저장 (content_analysis에)"""
         # 중복 제거된 출처
         unique_sources = []
         seen_urls = set()
 
-        # 에이전트가 수집한 출처
         for src in self._all_sources:
             url = src.get('url', '')
             if url and url not in seen_urls:
@@ -518,46 +414,19 @@ search_web 도구로 필요한 정보를 검색하세요.
                 unique_sources.append({
                     'title': src.get('title', ''),
                     'url': url,
-                    'publisher': '',
-                    'key_info': ''
                 })
 
-        # 결과에 포함된 출처
-        for src in result.get('sources', []):
-            url = src.get('url', '')
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                unique_sources.append(src)
+        # 기존 Research 가져오기
+        research = self.project.research
+        content_analysis = research.content_analysis or {}
 
-        # 기사별 요약 (intermediate_data에서 추출)
-        article_summaries = []
-        intermediate = self.execution.intermediate_data or {}
-        for search in intermediate.get('searches', []):
-            article_summaries.append({
-                'query': search.get('query', ''),
-                'summary': search.get('summary', ''),
-                'sources': search.get('sources', [])
-            })
+        # 리서치 결과 추가
+        content_analysis['research_result'] = result_text
 
-        Research.objects.update_or_create(
-            project=self.project,
-            defaults={
-                'source_url': source_url,
-                'topic': result.get('topic', topic),
-                'transcript': '',
-                'summary': '',
-                'title_candidates': result.get('title_candidates', []),
-                'best_title': result.get('best_title', {}),
-                'quotes': result.get('quotes', []),
-                'numbers': result.get('numbers', []),
-                'time_change': result.get('time_change', {}),
-                'person_stories': result.get('person_stories', []),
-                'paradox': result.get('paradox', {}),
-                'viewer_connection': result.get('viewer_connection', {}),
-                'narrative_structure': result.get('narrative_structure', {}),
-                'sources': unique_sources[:20],
-                'article_summaries': article_summaries,
-            }
-        )
+        # sources도 업데이트
+        research.content_analysis = content_analysis
+        research.sources = unique_sources[:20]
+        research.topic = topic_title or research.topic
+        research.save()
 
-        self.log(f'저장 완료: 출처 {len(unique_sources)}개, 기사 요약 {len(article_summaries)}개', 'info')
+        self.log(f'저장 완료: 출처 {len(unique_sources)}개', 'info')

@@ -34,6 +34,43 @@
 .char-counter.warning { color: #ffc107; }
 .char-counter.danger { color: #dc3545; }
 
+/* Markdown 콘텐츠 스타일 */
+.markdown-content {
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+.markdown-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+}
+.markdown-content th, .markdown-content td {
+    border: 1px solid #dee2e6;
+    padding: 0.5rem;
+    text-align: left;
+}
+.markdown-content th {
+    background: #f8f9fa;
+    font-weight: 600;
+}
+.markdown-content h2, .markdown-content h3 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    font-weight: 600;
+}
+.markdown-content h2 { font-size: 1.25rem; }
+.markdown-content h3 { font-size: 1.1rem; }
+.markdown-content ul, .markdown-content ol {
+    padding-left: 1.5rem;
+}
+.markdown-content li {
+    margin-bottom: 0.25rem;
+}
+.markdown-content strong {
+    font-weight: 600;
+}
+
 /* 씬 카드 스타일 */
 .scene-list {
     max-height: 70vh;
@@ -319,21 +356,24 @@
 </script>
 {% endif %}
 
-<!-- 1. 주제 -->
+<!-- 1. 유튜브 영상 주소 -->
 {% with exec=step_executions|dict_get:'topic_finder' %}
 <div class="step-section {% if topic %}has-data{% endif %}" id="topic">
     <div class="step-header">
         <div>
-            <strong>1. 주제</strong>
+            <strong>1. 유튜브 영상 주소</strong>
             {% if topic %}
             <span class="ms-2">{{ topic.title|truncatechars:50 }}</span>
+            {% if topic.video_id %}
+            <span class="badge bg-danger ms-2"><i class="bi bi-youtube"></i> YouTube</span>
+            {% endif %}
             {% endif %}
         </div>
         <div class="d-flex gap-2 align-items-center">
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'topic_finder' %}" class="d-flex gap-2">
                 {% csrf_token %}
                 <input type="text" name="manual_input" class="form-control form-control-sm" style="width: 400px;"
-                       value="{{ topic.title|default:'' }}" placeholder="주제를 입력하세요">
+                       value="{{ topic.url|default:'' }}" placeholder="YouTube URL을 입력하세요 (예: https://youtube.com/watch?v=...)">
                 <button type="submit" class="btn btn-sm btn-primary">
                     <i class="bi bi-check-lg"></i> 저장
                 </button>
@@ -348,21 +388,229 @@
 </div>
 {% endwith %}
 
-<!-- 2. 리서치 -->
+<!-- 2. YouTube 수집 (YouTube URL 있을 때만 표시) -->
+{% if topic.video_id %}
+{% with exec_yt=step_executions|dict_get:'youtube_collector' %}
+<div class="step-section {% if research.transcript %}has-data{% endif %}" id="youtube-collect-section">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#youtube-collect-body">
+        <div>
+            <strong>2. YouTube 수집</strong>
+            {% if exec_yt.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_yt.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 수집 중 {{ exec_yt.progress_percent }}%
+            </a>
+            {% elif research.transcript %}
+            <span class="badge bg-success ms-2">수집완료</span>
+            <span class="ms-2 text-muted">
+                자막 {{ research.transcript|length }}자
+                {% if research.youtube_comments.count %}| 댓글 {{ research.youtube_comments.count }}개{% endif %}
+            </span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'youtube_collector' %}" class="d-inline ajax-step-form">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-danger">
+                    <i class="bi bi-youtube"></i> 수집
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse" id="youtube-collect-body">
+        <div class="step-body">
+            {% if research.transcript %}
+            <div class="row">
+                <div class="col-md-6">
+                    <details class="mb-3" open>
+                        <summary><strong>자막 ({{ research.transcript|length }}자)</strong>
+                            {% if research.transcript_is_auto %}<span class="badge bg-secondary ms-1">자동생성</span>{% endif %}
+                            {% if research.transcript_language %}<span class="badge bg-outline-secondary ms-1">{{ research.transcript_language }}</span>{% endif %}
+                        </summary>
+                        <div class="mt-2 p-2 bg-light rounded" style="max-height: 200px; overflow-y: auto; font-size: 0.85em;">
+                            {{ research.transcript|truncatechars:3000 }}
+                        </div>
+                    </details>
+                </div>
+                <div class="col-md-6">
+                    {% if research.youtube_comments.count %}
+                    <details class="mb-3">
+                        <summary><strong>댓글 ({{ research.youtube_comments.count }}개)</strong></summary>
+                        <div class="mt-2" style="max-height: 200px; overflow-y: auto;">
+                            {% for comment in research.youtube_comments.all|slice:":20" %}
+                            <div class="border-start border-2 {% if comment.is_highlighted %}border-warning{% else %}border-secondary{% endif %} ps-2 mb-2 small">
+                                <strong>{{ comment.author }}</strong>
+                                {% if comment.like_count %}<span class="text-primary ms-2">👍 {{ comment.like_count|format_number }}</span>{% endif %}
+                                {% if comment.is_highlighted %}<span class="badge bg-warning text-dark ms-1">주요</span>{% endif %}
+                                <br>{{ comment.text|truncatechars:200 }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">YouTube 수집 버튼을 눌러 자막과 댓글을 수집하세요.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 3. 자막 분석 -->
+{% with exec_ta=step_executions|dict_get:'transcript_analyzer' %}
+<div class="step-section {% if research.content_analysis.transcript_analysis %}has-data{% endif %}" id="transcript-analysis-section">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#transcript-analysis-body">
+        <div>
+            <strong>3. 자막 분석</strong>
+            {% if exec_ta.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_ta.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 분석 중 {{ exec_ta.progress_percent }}%
+            </a>
+            {% elif research.content_analysis.transcript_analysis %}
+            <span class="badge bg-success ms-2">분석완료</span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('transcript_analyzer', '자막 분석')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'transcript_analyzer' %}" class="d-inline ms-2 ajax-step-form">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-pro">2.5 Pro</option>
+                    <option value="flash">3 Flash</option>
+                    <option value="pro">3 Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-primary" {% if not research.transcript %}disabled{% endif %}>
+                    <i class="bi bi-file-text"></i> 분석
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse" id="transcript-analysis-body">
+        <div class="step-body">
+            {% if research.content_analysis.transcript_analysis %}
+            <div class="markdown-content" id="transcript-analysis-md"></div>
+            <script type="text/plain" id="transcript-analysis-data">{{ research.content_analysis.transcript_analysis|safe }}</script>
+            {% elif not research.transcript %}
+            <p class="text-muted mb-0">YouTube 수집을 먼저 실행하세요.</p>
+            {% else %}
+            <p class="text-muted mb-0">자막 분석을 실행하면 데이터, 인물, 타임라인 등이 추출됩니다.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 4. 댓글 분석 -->
+{% with exec_ca=step_executions|dict_get:'comment_analyzer' %}
+<div class="step-section {% if research.content_analysis.comment_analysis %}has-data{% endif %}" id="comment-analysis-section">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#comment-analysis-body">
+        <div>
+            <strong>4. 댓글 분석</strong>
+            {% if exec_ca.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_ca.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 분석 중 {{ exec_ca.progress_percent }}%
+            </a>
+            {% elif research.content_analysis.comment_analysis %}
+            <span class="badge bg-success ms-2">분석완료</span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('comment_analyzer', '댓글 분석')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'comment_analyzer' %}" class="d-inline ms-2 ajax-step-form">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-pro">2.5 Pro</option>
+                    <option value="flash">3 Flash</option>
+                    <option value="pro">3 Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-info" {% if not research.youtube_comments.count %}disabled{% endif %}>
+                    <i class="bi bi-chat-dots"></i> 분석
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse" id="comment-analysis-body">
+        <div class="step-body">
+            {% if research.content_analysis.comment_analysis %}
+            <div class="markdown-content" id="comment-analysis-md"></div>
+            <script type="text/plain" id="comment-analysis-data">{{ research.content_analysis.comment_analysis|safe }}</script>
+            {% elif not research.youtube_comments.count %}
+            <p class="text-muted mb-0">YouTube 수집을 먼저 실행하세요.</p>
+            {% else %}
+            <p class="text-muted mb-0">댓글 분석을 실행하면 청중 욕구가 추출됩니다.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+
+<!-- 5. 대본 계획 -->
+{% with exec_sp=step_executions|dict_get:'script_planner' %}
+<div class="step-section {% if research.content_analysis.script_plan %}has-data{% endif %}" id="script-plan-section">
+    <div class="step-header" data-bs-toggle="collapse" data-bs-target="#script-plan-body">
+        <div>
+            <strong>5. 대본 계획</strong>
+            {% if exec_sp.status == 'running' %}
+            <a href="{% url 'pipeline:step_progress' project.pk exec_sp.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
+                <i class="bi bi-hourglass-split"></i> 계획 중 {{ exec_sp.progress_percent }}%
+            </a>
+            {% elif research.content_analysis.script_plan %}
+            <span class="badge bg-success ms-2">계획완료</span>
+            {% endif %}
+        </div>
+        <div onclick="event.stopPropagation();">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('script_planner', '대본 계획')">
+                <i class="bi bi-sliders"></i> 프롬프트
+            </button>
+            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'script_planner' %}" class="d-inline ms-2 ajax-step-form">
+                {% csrf_token %}
+                <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-pro">2.5 Pro</option>
+                    <option value="flash">3 Flash</option>
+                    <option value="pro">3 Pro</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-outline-success" {% if not research.content_analysis.transcript_analysis or not research.content_analysis.comment_analysis %}disabled{% endif %}>
+                    <i class="bi bi-diagram-3"></i> 계획
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="collapse" id="script-plan-body">
+        <div class="step-body">
+            {% if research.content_analysis.script_plan %}
+            <div class="markdown-content" id="script-plan-md"></div>
+            <script type="text/plain" id="script-plan-data">{{ research.content_analysis.script_plan|safe }}</script>
+            {% elif not research.content_analysis.transcript_analysis or not research.content_analysis.comment_analysis %}
+            <p class="text-muted mb-0">자막 분석과 댓글 분석을 먼저 실행하세요.</p>
+            {% else %}
+            <p class="text-muted mb-0">대본 계획을 실행하면 전체 구조가 설계됩니다.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endwith %}
+{% endif %}
+
+<!-- 6. 리서치 -->
 {% with exec=step_executions|dict_get:'researcher' %}
-<div class="step-section {% if research %}has-data{% endif %}" id="research">
+<div class="step-section {% if research.content_analysis.research_result %}has-data{% endif %}" id="research">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#research-body">
         <div>
-            <strong>2. 리서치</strong>
+            <strong>6. 리서치</strong>
             {% if exec.status == 'running' %}
             <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
                 <i class="bi bi-hourglass-split"></i> 진행 중 ({{ exec.progress_percent }}%)
             </a>
-            {% elif research %}
+            {% elif research.content_analysis.research_result %}
             <span class="badge bg-success ms-2">완료</span>
-            <span class="ms-2 text-muted">
-                인용구 {{ research.quotes|length }}개 | 숫자 {{ research.numbers|length }}개
-            </span>
             {% endif %}
             {% if exec.total_tokens %}
             <small class="ms-2 text-primary">{{ exec.total_tokens }} 토큰 / ${{ exec.estimated_cost }}</small>
@@ -381,96 +629,19 @@
                     <option value="pro">3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-search"></i> {% if research %}재실행{% else %}실행{% endif %}
+                    <i class="bi bi-search"></i> {% if research.content_analysis.research_result %}재실행{% else %}실행{% endif %}
                 </button>
             </form>
         </div>
     </div>
-    <div class="collapse {% if research %}show{% endif %}" id="research-body">
+    <div class="collapse" id="research-body">
         <div class="step-body">
-            {% if research %}
-            {% if research.best_title.title %}
-            <div class="alert alert-success py-2 mb-3">
-                <strong>선정 제목:</strong> {{ research.best_title.title }}
-            </div>
-            {% endif %}
-
-            <div class="row">
-                <div class="col-md-6">
-                    <!-- 인용구 -->
-                    {% if research.quotes %}
-                    <details class="mb-3" open>
-                        <summary><strong>인용구 ({{ research.quotes|length }}개)</strong></summary>
-                        <ul class="mt-2 small">
-                            {% for q in research.quotes %}
-                            <li class="mb-2">"{{ q.quote }}" <br><small class="text-muted">- {{ q.source }}</small></li>
-                            {% endfor %}
-                        </ul>
-                    </details>
-                    {% endif %}
-
-                    <!-- 숫자/통계 -->
-                    {% if research.numbers %}
-                    <details class="mb-3" open>
-                        <summary><strong>숫자/통계 ({{ research.numbers|length }}개)</strong></summary>
-                        <ul class="mt-2 small">
-                            {% for n in research.numbers %}
-                            <li class="mb-1"><strong>{{ n.number }}</strong> - {{ n.context }}</li>
-                            {% endfor %}
-                        </ul>
-                    </details>
-                    {% endif %}
-                </div>
-                <div class="col-md-6">
-                    <!-- 인물 사례 -->
-                    {% if research.person_stories %}
-                    <details class="mb-3">
-                        <summary><strong>인물 사례 ({{ research.person_stories|length }}개)</strong></summary>
-                        <div class="mt-2 small">
-                            {% for p in research.person_stories %}
-                            <div class="border-start border-2 border-primary ps-2 mb-2">
-                                <strong>{{ p.name }}</strong><br>
-                                {{ p.past|default:'' }} → {{ p.present|default:'' }}
-                            </div>
-                            {% endfor %}
-                        </div>
-                    </details>
-                    {% endif %}
-
-                    <!-- 역설 -->
-                    {% if research.paradox.common_belief %}
-                    <details class="mb-3">
-                        <summary><strong>역설/반전</strong></summary>
-                        <div class="mt-2 small bg-light p-2 rounded">
-                            <strong>통념:</strong> {{ research.paradox.common_belief }}<br>
-                            <strong>현실:</strong> {{ research.paradox.reality }}
-                        </div>
-                    </details>
-                    {% endif %}
-                </div>
-            </div>
-
-            <!-- 기사별 요약 -->
-            {% if research.article_summaries %}
-            <details class="mb-3">
-                <summary><strong>검색 결과 상세 ({{ research.article_summaries|length }}개)</strong></summary>
-                <div class="mt-2">
-                    {% for article in research.article_summaries %}
-                    <div class="card mb-2">
-                        <div class="card-header py-1">
-                            <small class="text-primary"><i class="bi bi-search"></i> {{ article.query }}</small>
-                        </div>
-                        <div class="card-body py-2">
-                            <div style="font-size: 0.8em; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{{ article.summary }}</div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </details>
-            {% endif %}
-
+            {% if research.content_analysis.research_result %}
+            <!-- 리서치 결과 (Markdown) -->
+            <div class="markdown-content" id="research-result-md"></div>
+            <script type="text/plain" id="research-result-data">{{ research.content_analysis.research_result|safe }}</script>
             {% else %}
-            <p class="text-muted mb-0">리서치를 실행하세요.</p>
+            <p class="text-muted mb-0">먼저 5. 대본 계획을 실행한 후 리서치를 실행하세요.</p>
             {% endif %}
 
             <!-- 수동 자료 입력 -->
@@ -506,7 +677,7 @@
 <div class="step-section {% if draft %}has-data{% endif %}" id="draft">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#draft-body">
         <div>
-            <strong>3. 대본</strong>
+            <strong>7. 대본</strong>
             {% if exec.status == 'running' %}
             <a href="{% url 'pipeline:step_progress' project.pk exec.pk %}" class="badge bg-warning text-dark ms-2" onclick="event.stopPropagation();">
                 <i class="bi bi-hourglass-split"></i> 진행 중 ({{ exec.progress_percent }}%)
@@ -539,7 +710,7 @@
             </form>
         </div>
     </div>
-    <div class="collapse {% if draft %}show{% endif %}" id="draft-body">
+    <div class="collapse" id="draft-body">
         <div class="step-body">
             <div class="mb-2 d-flex justify-content-between align-items-center">
                 <div>
@@ -567,7 +738,7 @@
 <div class="step-section {% if scenes.count > 0 %}has-data{% endif %}" id="scenes">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#scenes-body">
         <div>
-            <strong>4. 씬 관리</strong>
+            <strong>8. 씬 관리</strong>
             {% if scenes.count > 0 %}
             <span class="badge bg-success ms-2">{{ scenes.count }}개 씬</span>
             {% endif %}
@@ -657,7 +828,7 @@
             </form>
         </div>
     </div>
-    <div class="collapse {% if scenes.count > 0 %}show{% endif %}" id="scenes-body">
+    <div class="collapse" id="scenes-body">
         <div class="step-body p-0">
             {% if scenes.count > 0 %}
             <!-- 전체 삭제 버튼 -->
@@ -797,7 +968,7 @@
 <div class="step-section" id="video">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#video-body">
         <div>
-            <strong>5. 영상 제작</strong>
+            <strong>9. 영상 제작</strong>
             {% if project.final_video %}
             <span class="badge bg-success ms-2">완료</span>
             {% endif %}
@@ -855,7 +1026,7 @@
             </button>
         </div>
     </div>
-    <div class="collapse {% if project.final_video %}show{% endif %}" id="video-body">
+    <div class="collapse" id="video-body">
         <div class="step-body">
             <div class="row">
                 {% if project.final_video %}
@@ -904,7 +1075,7 @@
 <div class="step-section" id="upload">
     <div class="step-header" data-bs-toggle="collapse" data-bs-target="#upload-body">
         <div>
-            <strong>6. 업로드 정보</strong>
+            <strong>10. 업로드 정보</strong>
             {% if project.upload_info %}
             <span class="badge bg-success ms-2">설정됨</span>
             {% endif %}
@@ -1128,6 +1299,8 @@
 {% endblock %}
 
 {% block extra_js %}
+<!-- Marked.js for Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
 // 완료 알림음 재생
 function playSuccessSound() {
@@ -1969,6 +2142,37 @@ async function resetPrompt() {
         alert('오류: ' + error.message);
     }
 }
+
+// Markdown 렌더링
+if (typeof marked !== 'undefined') {
+    // 자막 분석
+    const transcriptData = document.getElementById('transcript-analysis-data');
+    const transcriptMd = document.getElementById('transcript-analysis-md');
+    if (transcriptData && transcriptMd) {
+        transcriptMd.innerHTML = marked.parse(transcriptData.textContent);
+    }
+
+    // 댓글 분석
+    const commentData = document.getElementById('comment-analysis-data');
+    const commentMd = document.getElementById('comment-analysis-md');
+    if (commentData && commentMd) {
+        commentMd.innerHTML = marked.parse(commentData.textContent);
+    }
+
+    // 대본 계획
+    const planData = document.getElementById('script-plan-data');
+    const planMd = document.getElementById('script-plan-md');
+    if (planData && planMd) {
+        planMd.innerHTML = marked.parse(planData.textContent);
+    }
+
+    // 리서치 결과
+    const researchData = document.getElementById('research-result-data');
+    const researchMd = document.getElementById('research-result-md');
+    if (researchData && researchMd) {
+        researchMd.innerHTML = marked.parse(researchData.textContent);
+    }
+}
 </script>
 
 <!-- 자동 생성 모달 -->
@@ -1982,7 +2186,19 @@ async function resetPrompt() {
             <form method="post" action="{% url 'pipeline:auto_pipeline' project.pk %}">
                 {% csrf_token %}
                 <div class="modal-body">
+                    {% if topic.video_id %}
+                    <p class="text-muted small"><span class="badge bg-danger me-1"><i class="bi bi-youtube"></i></span>YouTube 수집 → 콘텐츠 분석 → 리서치 → 대본 → 씬분할 → 이미지 프롬프트 → 이미지 생성까지 자동 실행됩니다.</p>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">콘텐츠 분석</label>
+                        <select name="model_content_analyzer" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                        </select>
+                    </div>
+                    {% else %}
                     <p class="text-muted small">리서치 → 대본 → 씬분할 → 이미지 프롬프트 → 이미지 생성까지 자동 실행됩니다.</p>
+                    {% endif %}
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">리서치</label>

@@ -33,7 +33,11 @@ class AutoPipelineService(BaseStepService):
     RETRY_DELAY = 30  # 초
 
     # 실행할 단계들 (순서대로) - 모델은 get_pipeline_steps()에서 동적으로 설정
+    # YouTube URL이 있으면 youtube_collector → content_analyzer → researcher 순서
+    # 없으면 기존대로 researcher부터 시작
     DEFAULT_PIPELINE_STEPS = [
+        {'name': 'youtube_collector', 'default_model': None, 'display': 'YouTube 수집', 'requires_youtube': True},
+        {'name': 'content_analyzer', 'default_model': '2.5-flash', 'display': '콘텐츠 분석', 'requires_youtube': True},
         {'name': 'researcher', 'default_model': '2.5-flash', 'display': '리서치'},
         {'name': 'script_writer', 'default_model': '2.5-pro', 'display': '대본 작성'},
         {'name': 'scene_planner', 'default_model': '2.5-flash', 'display': '씬 분할'},
@@ -51,8 +55,18 @@ class AutoPipelineService(BaseStepService):
         if self.execution.intermediate_data:
             model_settings = self.execution.intermediate_data.get('model_settings', {})
 
+        # YouTube URL 있는지 확인
+        has_youtube = False
+        if hasattr(self.project, 'topic') and self.project.topic:
+            url = self.project.topic.url or ''
+            has_youtube = 'youtube.com' in url or 'youtu.be' in url
+
         steps = []
         for step in self.DEFAULT_PIPELINE_STEPS:
+            # requires_youtube=True인데 YouTube URL이 없으면 건너뜀
+            if step.get('requires_youtube') and not has_youtube:
+                continue
+
             step_copy = step.copy()
             step_name = step['name']
             # 모델 설정이 있으면 사용, 없으면 기본값
