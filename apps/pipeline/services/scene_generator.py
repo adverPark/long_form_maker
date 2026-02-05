@@ -357,8 +357,8 @@ class SceneGeneratorService(BaseStepService):
             prompt_parts.append(f"Style: {style.style_prompt}")
 
         # 캐릭터 프롬프트 추가 (캐릭터 등장 씬이면)
-        if scene.has_character and character and character.prompt:
-            prompt_parts.append(f"Character: {character.prompt}")
+        if scene.has_character and character and character.character_prompt:
+            prompt_parts.append(f"Character: {character.character_prompt}")
 
         # 기본 프롬프트
         prompt_parts.append(base_prompt)

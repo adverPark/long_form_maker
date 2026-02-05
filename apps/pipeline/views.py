@@ -919,6 +919,11 @@ def scene_edit(request, pk, scene_number):
         scene.narration_tts = convert_to_tts(narration)
         updated_fields.extend(['narration', 'narration_tts'])
 
+    # narration_tts 직접 편집 (전달된 경우에만)
+    if 'narration_tts' in request.POST and 'narration' not in request.POST:
+        scene.narration_tts = request.POST.get('narration_tts', '').strip()
+        updated_fields.append('narration_tts')
+
     # image_prompt 업데이트 (전달된 경우에만)
     if 'image_prompt' in request.POST:
         scene.image_prompt = request.POST.get('image_prompt', '').strip()
@@ -1276,11 +1281,14 @@ def delete_all_audio(request, pk):
 
     deleted_count = 0
     for scene in project.scenes.all():
+        has_audio = bool(scene.audio)
+        has_subtitle = bool(scene.subtitle_file)
+
         if scene.audio:
             try:
                 if os.path.exists(scene.audio.path):
                     os.remove(scene.audio.path)
-            except:
+            except Exception:
                 pass
             scene.audio = None
 
@@ -1288,15 +1296,16 @@ def delete_all_audio(request, pk):
             try:
                 if os.path.exists(scene.subtitle_file.path):
                     os.remove(scene.subtitle_file.path)
-            except:
+            except Exception:
                 pass
             scene.subtitle_file = None
 
-        scene.audio_duration = 0
-        scene.subtitle_status = 'none'
-        scene.subtitle_word_count = 0
-        scene.save()
-        deleted_count += 1
+        if has_audio or has_subtitle:
+            scene.audio_duration = 0
+            scene.subtitle_status = 'none'
+            scene.subtitle_word_count = 0
+            scene.save()
+            deleted_count += 1
 
     return JsonResponse({
         'success': True,

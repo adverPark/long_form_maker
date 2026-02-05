@@ -2280,7 +2280,7 @@ async function regenerateTts(sceneNumber) {
 
         if (data.success) {
             // TTS 텍스트 업데이트
-            const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+            const ttsText = document.querySelector(`#scene-${sceneNumber} .tts-text`);
             if (ttsText && data.narration_tts) {
                 ttsText.textContent = data.narration_tts;
             }
@@ -2297,7 +2297,7 @@ async function regenerateTts(sceneNumber) {
 }
 
 async function saveTtsText(sceneNumber) {
-    const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+    const ttsText = document.querySelector(`#scene-${sceneNumber} .tts-text`);
     if (!ttsText) return;
 
     try {
@@ -2340,7 +2340,7 @@ async function convertTtsAI(sceneNumber) {
         const data = await response.json();
 
         if (data.success) {
-            const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+            const ttsText = document.querySelector(`#scene-${sceneNumber} .tts-text`);
             if (ttsText && data.narration_tts) {
                 ttsText.textContent = data.narration_tts;
             }
@@ -2364,7 +2364,7 @@ async function convertAllTtsAI() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 변환 중...';
 
-    const modelType = document.getElementById('tts-model-select').value;
+    const modelType = document.getElementById('tts-model-select')?.value || '2.5-flash';
     const formData = new FormData();
     formData.append('model_type', modelType);
 
@@ -2388,7 +2388,7 @@ async function convertAllTtsAI() {
         if (data.success) {
             // 각 씬의 TTS 텍스트 업데이트
             for (const result of data.results) {
-                const ttsText = document.querySelector(`#tts-${result.scene} .tts-text`);
+                const ttsText = document.querySelector(`#scene-${result.scene} .tts-text`);
                 if (ttsText) {
                     ttsText.textContent = result.tts;
                 }
