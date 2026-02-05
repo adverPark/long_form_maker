@@ -19,6 +19,7 @@ class PipelineStep(models.Model):
         ('video_generator', '동영상 생성'),
         ('video_composer', '영상 편집'),
         ('thumbnail_generator', '썸네일 생성'),
+        ('upload_info_generator', '업로드 정보 생성'),
     ]
 
     name = models.CharField(max_length=50, choices=STEP_CHOICES, unique=True, verbose_name="단계명")
@@ -355,9 +356,9 @@ class ImageStylePreset(models.Model):
     name = models.CharField(max_length=100, verbose_name="이름")
     description = models.TextField(blank=True, verbose_name="설명")
 
-    # 스타일 프롬프트 (영어)
-    style_prompt = models.TextField(verbose_name="스타일 프롬프트",
-        help_text="예: photorealistic, vibrant colors, news documentary style, professional lighting")
+    # 스타일 프롬프트 (영어) - 선택사항
+    style_prompt = models.TextField(blank=True, verbose_name="스타일 프롬프트",
+        help_text="선택사항. 없으면 샘플 이미지만 참조")
 
     is_default = models.BooleanField(default=False, verbose_name="기본값")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -403,9 +404,9 @@ class CharacterPreset(models.Model):
     # 캐릭터 이미지
     image = models.ImageField(upload_to='presets/characters/', verbose_name="캐릭터 이미지")
 
-    # 캐릭터 프롬프트 설명 (영어)
-    character_prompt = models.TextField(verbose_name="캐릭터 프롬프트",
-        help_text="예: simple webtoon style mascot, curly black hair, round glasses, blue shirt")
+    # 캐릭터 프롬프트 설명 (영어) - 선택사항
+    character_prompt = models.TextField(blank=True, verbose_name="캐릭터 프롬프트",
+        help_text="선택사항. 없으면 캐릭터 이미지만 참조")
 
     is_default = models.BooleanField(default=False, verbose_name="기본값")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -546,10 +547,7 @@ class UploadInfo(models.Model):
 
     def get_full_description(self) -> str:
         """타임라인과 태그가 포함된 전체 설명 생성"""
-        # 면책 조항 (투자 경고문)
-        disclaimer = "⚠️ 본 영상은 개인적인 의견이며 투자 권유가 아닙니다. 투자에 대한 책임은 본인에게 있습니다.\n\n"
-
-        parts = [disclaimer + self.description]
+        parts = [self.description]
 
         # 타임라인 추가
         if self.timeline:

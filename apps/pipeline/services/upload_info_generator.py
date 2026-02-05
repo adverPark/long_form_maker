@@ -1,0 +1,192 @@
+import json
+import re
+import wave
+from .base import BaseStepService
+from apps.pipeline.models import UploadInfo
+
+
+class UploadInfoGeneratorService(BaseStepService):
+    """업로드 정보 생성 서비스 (제목, 설명, 타임라인, 태그, 썸네일 프롬프트)"""
+
+    agent_name = 'upload_info_generator'
+
+    def execute(self):
+        self.update_progress(5, '데이터 준비 중...')
+
+        # 씬 정보 수집
+        scenes = list(self.project.scenes.all().order_by('scene_number'))
+        if not scenes:
+            raise ValueError('씬이 없습니다. 씬 분할을 먼저 진행하세요.')
+
+        self.log(f'총 {len(scenes)}개 씬 로드')
+
+        # 씬 시간 + 섹션 + 나레이션 수집
+        scene_info_list = []
+        current_time = 0
+
+        for scene in scenes:
+            duration = 0
+            if scene.audio:
+                try:
+                    with wave.open(scene.audio.path, 'rb') as wav:
+                        duration = wav.getnframes() / float(wav.getframerate())
+                except Exception:
+                    pass
+            if duration == 0:
+                duration = scene.audio_duration or scene.duration or 0
+
+            scene_info_list.append({
+                'scene': scene.scene_number,
+                'time': current_time,
+                'section': scene.section,
+                'narration': scene.narration or '',
+            })
+            current_time += duration
+
+        total_duration = current_time
+        total_mins = int(total_duration // 60)
+        total_secs = int(total_duration % 60)
+
+        # script_plan 가져오기
+        script_plan = ''
+        try:
+            research = self.project.research
+            if research and research.content_analysis:
+                script_plan = research.content_analysis.get('script_plan', '')
+                if script_plan:
+                    self.log(f'script_plan 로드: {len(str(script_plan))}자')
+        except Exception:
+            pass
+
+        if not script_plan:
+            self.log('script_plan 없음 - 씬 정보만으로 진행', 'warning')
+
+        # 씬 정보 텍스트 변환
+        scenes_text = ""
+        for s in scene_info_list:
+            mins = int(s['time'] // 60)
+            secs = int(s['time'] % 60)
+            scenes_text += f"[{mins}:{secs:02d}] 씬{s['scene']} ({s['section']}): {s['narration']}\n"
+
+        # UploadInfo 가져오거나 생성
+        info, created = UploadInfo.objects.get_or_create(
+            project=self.project,
+            defaults={'title': self.project.name}
+        )
+
+        # ===== 1단계: 제목 + 설명 + 타임라인 생성 =====
+        self.update_progress(20, '업로드 정보 생성 중...')
+        self.raise_if_cancelled()
+
+        script_plan_section = ""
+        if script_plan:
+            script_plan_text = json.dumps(script_plan, ensure_ascii=False, indent=2) if isinstance(script_plan, (dict, list)) else str(script_plan)
+            script_plan_section = f"""
+## 대본 생성 계획
+{script_plan_text}
+"""
+
+        prompt = f"""YouTube 영상 업로드 정보를 생성해주세요.
+
+## 영상 정보
+- 총 길이: {total_mins}분 {total_secs}초
+- 씬 개수: {len(scene_info_list)}개
+{script_plan_section}
+## 전체 씬 (시간 + 나레이션)
+{scenes_text}
+
+## 생성해주세요
+
+1. **제목** (50자 이내): 클릭 유도하는 매력적인 제목
+2. **설명**: 훅(1-2문장) + 요약(3-4문장) + 구독 요청
+3. **타임라인**: 섹션별 시작 시간 + 내용 기반 제목 (10자 이내)
+   - intro, body_1, body_2, body_3, action, outro 각각
+   - "본론 1" 같은 의미없는 제목 금지!
+
+JSON 형식:
+{{
+    "title": "영상 제목",
+    "description": "훅\\n\\n요약\\n\\n📌 구독과 좋아요 부탁드려요!\\n🔔 알림 설정하세요!",
+    "timeline": [
+        {{"time": "0:00", "title": "시작 제목"}},
+        {{"time": "1:16", "title": "다음 제목"}},
+        ...
+    ]
+}}
+
+주의: JSON만 응답 (```json 없이)"""
+
+        response_text = self.call_gemini(prompt)
+
+        # JSON 파싱
+        response_text = response_text.strip()
+        if response_text.startswith('```'):
+            response_text = response_text.split('\n', 1)[1]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+
+        result = json.loads(response_text)
+        info.title = result.get('title', self.project.name)[:100]
+        info.description = result.get('description', '').strip()
+        info.timeline = result.get('timeline', [])
+
+        self.log(f'제목: {info.title}')
+        self.log(f'타임라인: {len(info.timeline)}개 항목')
+
+        # ===== 2단계: 태그 생성 =====
+        self.update_progress(60, '태그 생성 중...')
+        self.raise_if_cancelled()
+
+        excluded_keywords = {'유흥', '술집', '노래방', '호프', '소주', '맥주', '주류', '성인'}
+        tags = ['경제', '자영업', '재테크', '돈', '투자']
+
+        if info.title:
+            words = re.findall(r'[가-힣]+', info.title)
+            for word in words:
+                if len(word) >= 2 and word not in excluded_keywords and word not in tags:
+                    tags.append(word)
+                    if len(tags) >= 15:
+                        break
+
+        info.tags = tags[:15]
+        self.log(f'태그: {len(info.tags)}개')
+
+        # ===== 3단계: 썸네일 프롬프트 생성 =====
+        self.update_progress(80, '썸네일 프롬프트 생성 중...')
+        self.raise_if_cancelled()
+
+        intro_narrations = [s['narration'] for s in scene_info_list[:5]]
+        intro_text = ' '.join(intro_narrations)[:500]
+
+        thumb_prompt = f"""YouTube 썸네일 이미지 생성 프롬프트를 영어로 작성해주세요.
+
+영상 제목: {info.title}
+영상 시작 내용: {intro_text}
+
+요구사항:
+1. 클릭을 유도하는 강렬한 이미지
+2. 한글 텍스트 10자 이내 포함
+3. 경제/돈 관련 시각적 요소
+4. 감정: 충격, 호기심, 긴박감 중 택1
+
+프롬프트만 출력 (설명 없이, 색상 지정 없이):"""
+
+        try:
+            thumb_response = self.call_gemini(thumb_prompt)
+            info.thumbnail_prompt = thumb_response.strip()
+            self.log(f'썸네일 프롬프트: {len(info.thumbnail_prompt)}자')
+        except Exception as e:
+            self.log(f'썸네일 프롬프트 생성 실패: {e}', 'warning')
+            info.thumbnail_prompt = f"""YouTube thumbnail for Korean economy video.
+
+Main visual: dramatic money/finance scene with urgency
+Korean text: '{info.title[:10] if info.title else "경제"}'
+Style: clickbait youtube thumbnail, high contrast, dramatic lighting
+Emotion: shock, curiosity
+
+Technical: 1280x720, clean composition, mobile-friendly text size"""
+
+        # ===== 저장 =====
+        self.update_progress(95, '저장 중...')
+        info.save()
+        self.log('업로드 정보 저장 완료')

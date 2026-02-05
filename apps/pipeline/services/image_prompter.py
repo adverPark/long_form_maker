@@ -109,104 +109,50 @@ class ImagePrompterService(BaseStepService):
 
     def _get_default_prompt(self) -> str:
         """기본 시스템 프롬프트"""
-        # 한글금지 모드면 텍스트 제외 프롬프트 사용
-        if getattr(self, 'use_no_text', False):
-            return self._get_flash_prompt()
-        return self._get_pro_prompt()
-
-    def _get_pro_prompt(self) -> str:
-        """Pro 모델용 프롬프트 (한글 텍스트 포함)"""
         return """# 이미지 프롬프트 작성 전문가
 
-대본(narration)을 분석하여 상황을 아주 디테일하게 묘사하는 이미지 프롬프트를 작성합니다.
+대본(narration)을 분석하여 상황을 묘사하는 이미지 프롬프트를 작성합니다.
 
 ## 핵심 원칙
 
 - 대본 내용이 이미지만 봐도 이해되어야 함
-- 캐릭터/스타일은 별도 참조 이미지로 제공됨 → 프롬프트에 캐릭터 외모 설명 넣지 말 것!
-- 상황, 배경, 분위기, 감정을 디테일하게 묘사
-- 컬러풀하게! 밋밋한 색상 금지
+- 상황, 배경, 분위기, 감정, 동작을 묘사
+- 스타일/캐릭터 외모는 참조 이미지로 제공되므로 프롬프트에 포함하지 말 것
 
-## 씬 유형별 공식
+## 절대 금지
 
-### 1. 데이터/통계 씬 (숫자, 퍼센트)
-"Colorful infographic showing [주제]. Main visual: [차트/그래프]. Large bold text '[숫자]' with glowing effect. Korean text '[한글 라벨]' as subtitle. Color scheme: [감정 색상]. Modern vibrant infographic style."
-
-### 2. 현장/실제 상황 씬
-"Colorful realistic scene of [장소]. Setting: [구체적 환경]. Main subject: [피사체]. [상태/동작]. Style: photorealistic with vibrant color grading, cinematic quality. [조명]."
-
-### 3. 역사/과거 사건 씬
-"Historical documentary style, [시대]. Era: [날짜]. Setting: [장소]. Key visual: [핵심 이미지]. Style: vintage documentary, historical footage look. Color: [세피아/필름톤]."
-
-### 4. 캐릭터 등장 씬 (has_character: true)
-"Character as narrator (참조 이미지 제공됨). Expression: [표정]. Pose: [포즈]. Action: [동작]. Background: photorealistic [대본 내용에 맞는 배경], vibrant colors. Mood: [분위기]."
-
-### 5. 개념/추상 설명 씬
-"Conceptual visualization of [개념]. Visual metaphor: [비유]. Key elements: [구성요소]. Style: clean conceptual illustration, documentary quality. Color: [색상]. Dramatic lighting."
-
-## 색상 가이드
-- 위기/하락/경고: 빨강
-- 성장/상승/희망: 초록
-- 분석/설명/중립: 파랑
-- 주의/변화: 주황
-- 역사/과거: 세피아
-- 미래/전망: 하늘색/보라
-
-## 중요!
-- 최소 30단어, 권장 50-80단어
-- 영어로 작성
-- ❌ 캐릭터 외모 설명 금지 (이미지로 제공됨)
-- ✅ 상황/배경/분위기/감정/동작 묘사에 집중
-- 추상적/모호한 표현 금지"""
-
-    def _get_flash_prompt(self) -> str:
-        """Flash/Replicate 모델용 프롬프트 (텍스트 완전 제외)"""
-        return """# 이미지 프롬프트 작성 전문가 (NO TEXT MODE)
-
-대본(narration)을 분석하여 상황을 아주 디테일하게 묘사하는 이미지 프롬프트를 작성합니다.
-
-## 🚨 중요: 텍스트 없는 이미지 전용
-
-**절대 금지:**
-- ❌ 한글/영어 텍스트
-- ❌ 숫자 텍스트
+- ❌ 스타일 설명 (realistic, cartoon, anime 등)
+- ❌ 색감 설명 (colorful, vibrant, bright 등)
+- ❌ 캐릭터 외모 설명
+- ❌ 한글/영어 텍스트, 숫자 텍스트
 - ❌ "text showing...", "text saying..." 표현
-- ❌ 캐릭터 외모 설명 (이미지로 제공됨)
 
-**대신 사용:**
-- ✅ 시각적 메타포 (그래프 모양, 화살표 방향)
-- ✅ 색상으로 감정 표현 (빨강=위기, 초록=성장)
-- ✅ 상황/배경/분위기/감정/동작 묘사
+## 작성 방법
 
-## 씬 유형별 공식
+순수하게 **무엇이 어디서 어떻게** 하고 있는지만 묘사:
+- 장소/배경 환경
+- 피사체/대상
+- 동작/상태
+- 분위기/감정
+- 조명/시간대
 
-### 1. 데이터/통계 씬
-"Colorful infographic visualization. Main visual: [3D 차트/그래프 모양]. Rising/falling bars/arrows. NO TEXT. Color scheme: [감정 색상]. Clean modern style."
+## 예시
 
-### 2. 현장/실제 상황 씬
-"Colorful realistic scene of [장소]. Setting: [구체적 환경]. Main subject: [피사체]. [상태/동작]. Style: photorealistic, cinematic quality. [조명]. NO TEXT."
+❌ 나쁜 예: "Colorful realistic scene of a busy street with vibrant neon lights"
+✅ 좋은 예: "A busy street at night, neon signs reflected on wet pavement, crowds walking, steam rising from food stalls"
 
-### 3. 역사/과거 사건 씬
-"Historical documentary style, [시대]. Setting: [장소]. Key visual: [핵심 이미지]. Sepia/film grain. NO TEXT."
+❌ 나쁜 예: "Cartoon style character with big eyes smiling"
+✅ 좋은 예: "Character smiling warmly, arms crossed, standing confidently"
 
-### 4. 캐릭터 등장 씬 (has_character: true)
-"Character as narrator (참조 이미지 제공됨). Expression: [표정]. Pose: [포즈]. Action: [동작]. Background: [배경], vibrant colors. Mood: [분위기]. NO TEXT."
+## 캐릭터 등장 씬 (has_character: true)
 
-### 5. 개념/추상 설명 씬
-"Conceptual visualization of [개념]. Visual metaphor: [비유]. Key elements: [구성요소]. Color: [색상]. Dramatic lighting. NO TEXT."
+캐릭터의 표정, 포즈, 동작, 배경만 묘사. 외모 설명 금지.
 
-## 색상으로 의미 전달
-- 위기/하락: 빨강, 어두운 톤
-- 성장/희망: 초록, 밝은 톤
-- 분석/중립: 파랑
-- 역사/과거: 세피아
+## 출력 형식
 
-## 중요!
-- 최소 30단어, 권장 50-80단어
 - 영어로 작성
-- **NO TEXT IN IMAGE** 필수
-- ❌ 캐릭터 외모 설명 금지
-- ✅ 상황/배경/분위기/감정/동작 묘사에 집중"""
+- 30-60단어
+- 상황 묘사에 집중"""
 
     def _generate_batch_prompts(self, batch: list, system_prompt: str) -> list:
         """배치로 프롬프트 생성"""

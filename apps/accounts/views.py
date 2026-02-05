@@ -160,8 +160,8 @@ def save_image_style(request):
     style_prompt = request.POST.get('style_prompt', '').strip()
     is_default = request.POST.get('is_default') == 'on'
 
-    if not name or not style_prompt:
-        messages.error(request, '이름과 스타일 프롬프트를 입력해주세요.')
+    if not name:
+        messages.error(request, '이름을 입력해주세요.')
         return redirect('accounts:settings')
 
     # 첫 번째면 자동으로 기본값
@@ -226,8 +226,7 @@ def edit_image_style(request, pk):
 
     if name:
         style.name = name
-    if style_prompt:
-        style.style_prompt = style_prompt
+    style.style_prompt = style_prompt  # 빈 값도 허용
 
     style.save()
 
@@ -260,8 +259,8 @@ def save_character(request):
     image = request.FILES.get('image')
     is_default = request.POST.get('is_default') == 'on'
 
-    if not name or not character_prompt or not image:
-        messages.error(request, '이름, 캐릭터 프롬프트, 이미지를 모두 입력해주세요.')
+    if not name or not image:
+        messages.error(request, '이름과 이미지를 입력해주세요.')
         return redirect('accounts:settings')
 
     if not CharacterPreset.objects.filter(user=request.user).exists():
@@ -319,8 +318,7 @@ def edit_character(request, pk):
 
     if name:
         char.name = name
-    if character_prompt:
-        char.character_prompt = character_prompt
+    char.character_prompt = character_prompt  # 빈 값도 허용
     if image:
         char.image = image
 

@@ -1,11 +1,23 @@
 """자동 파이프라인 서비스
 
 주제 입력 후 전체 파이프라인 자동 실행:
-1. 리서치 (researcher)
-2. 대본 작성 (script_writer)
-3. 씬 분할 (scene_planner)
-4. 이미지 프롬프트 + TTS (병렬: image_prompter + tts_generator)
-5. 이미지 생성 (scene_generator)
+
+YouTube URL 있는 경우:
+1. YouTube 수집 (youtube_collector)
+2. 자막 분석 (transcript_analyzer)
+3. 댓글 분석 (comment_analyzer)
+4. 대본 계획 (script_planner)
+5. 리서치 (researcher)
+6. 대본 작성 (script_writer)
+7. 씬 분할 (scene_planner) - 규칙 기반, 모델 불필요
+8. TTS 생성 (tts_generator)
+9. 이미지 프롬프트 (image_prompter)
+10. 이미지 생성 (scene_generator)
+11. 영상 생성 (video_generator)
+12. 영상 조립 (video_composer)
+
+YouTube URL 없는 경우:
+5~12만 실행 (리서치부터)
 """
 
 import threading
@@ -33,19 +45,21 @@ class AutoPipelineService(BaseStepService):
     RETRY_DELAY = 30  # 초
 
     # 실행할 단계들 (순서대로) - 모델은 get_pipeline_steps()에서 동적으로 설정
-    # YouTube URL이 있으면 youtube_collector → content_analyzer → researcher 순서
+    # YouTube URL이 있으면 youtube_collector → transcript_analyzer → comment_analyzer → script_planner → ...
     # 없으면 기존대로 researcher부터 시작
     DEFAULT_PIPELINE_STEPS = [
         {'name': 'youtube_collector', 'default_model': None, 'display': 'YouTube 수집', 'requires_youtube': True},
-        {'name': 'content_analyzer', 'default_model': '2.5-flash', 'display': '콘텐츠 분석', 'requires_youtube': True},
+        {'name': 'transcript_analyzer', 'default_model': '2.5-flash', 'display': '자막 분석', 'requires_youtube': True},
+        {'name': 'comment_analyzer', 'default_model': '2.5-flash', 'display': '댓글 분석', 'requires_youtube': True},
+        {'name': 'script_planner', 'default_model': '2.5-flash', 'display': '대본 계획', 'requires_youtube': True},
         {'name': 'researcher', 'default_model': '2.5-flash', 'display': '리서치'},
         {'name': 'script_writer', 'default_model': '2.5-pro', 'display': '대본 작성'},
-        {'name': 'scene_planner', 'default_model': '2.5-flash', 'display': '씬 분할'},
-        # TTS는 백그라운드로 시작
-        {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성', 'background': True},
-        # 이미지 프롬프트 → 이미지 생성 (순차)
+        {'name': 'scene_planner', 'default_model': None, 'display': '씬 분할'},  # 규칙 기반, 모델 불필요
+        {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성'},
         {'name': 'image_prompter', 'default_model': '2.5-flash', 'display': '이미지 프롬프트'},
-        {'name': 'scene_generator', 'default_model': 'pro', 'display': '이미지 생성'},
+        {'name': 'scene_generator', 'default_model': None, 'display': '이미지 생성'},
+        {'name': 'video_generator', 'default_model': None, 'display': '영상 생성'},
+        {'name': 'video_composer', 'default_model': None, 'display': '영상 조립'},
     ]
 
     def get_pipeline_steps(self):

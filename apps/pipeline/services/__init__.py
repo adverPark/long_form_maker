@@ -13,6 +13,8 @@ from .video_generator import VideoGeneratorService
 from .video_composer import VideoComposerService
 from .thumbnail_generator import ThumbnailGeneratorService
 from .tts_generator import TTSGeneratorService
+from .tts_converter import TTSConverterService
+from .upload_info_generator import UploadInfoGeneratorService
 from .auto_pipeline import AutoPipelineService
 
 # 에이전트 이름 -> 서비스 클래스 매핑
@@ -26,11 +28,13 @@ SERVICE_REGISTRY = {
     'script_writer': ScriptWriterService,
     'scene_planner': ScenePlannerService,
     'image_prompter': ImagePrompterService,
+    'tts_converter': TTSConverterService,
     'scene_generator': SceneGeneratorService,
     'tts_generator': TTSGeneratorService,
     'video_generator': VideoGeneratorService,
     'video_composer': VideoComposerService,
     'thumbnail_generator': ThumbnailGeneratorService,
+    'upload_info_generator': UploadInfoGeneratorService,
 }
 
 

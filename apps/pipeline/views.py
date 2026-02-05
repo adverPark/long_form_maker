@@ -375,10 +375,11 @@ def auto_pipeline(request, pk):
     # 모델 선택 가져오기
     model_settings = {
         'youtube_collector': None,  # 모델 사용 안함
-        'content_analyzer': request.POST.get('model_content_analyzer', '2.5-flash'),
+        'transcript_analyzer': request.POST.get('model_transcript_analyzer', '2.5-flash'),
+        'comment_analyzer': request.POST.get('model_comment_analyzer', '2.5-flash'),
+        'script_planner': request.POST.get('model_script_planner', '2.5-flash'),
         'researcher': request.POST.get('model_researcher', '2.5-flash'),
         'script_writer': request.POST.get('model_script_writer', '2.5-pro'),
-        'scene_planner': request.POST.get('model_scene_planner', '2.5-flash'),
         'image_prompter': request.POST.get('model_image_prompter', '2.5-flash'),
     }
 
@@ -928,6 +929,13 @@ def scene_edit(request, pk, scene_number):
         scene.has_character = request.POST.get('has_character') in ['true', 'True', '1', 'on']
         updated_fields.append('has_character')
 
+    # regenerate_tts: 나레이션 변경 없이 TTS 텍스트만 재생성
+    if 'regenerate_tts' in request.POST and 'narration' not in request.POST:
+        if scene.narration:
+            scene.narration_tts = convert_to_tts(scene.narration)
+            if 'narration_tts' not in updated_fields:
+                updated_fields.append('narration_tts')
+
     if updated_fields:
         scene.save(update_fields=updated_fields)
 
@@ -936,6 +944,232 @@ def scene_edit(request, pk, scene_number):
         'message': '저장되었습니다.',
         'narration_tts': scene.narration_tts,
     })
+
+
+@login_required
+@require_POST
+def scene_convert_tts(request, pk, scene_number):
+    """개별 씬 TTS 텍스트 변환 (Gemini)"""
+    from google import genai
+    from apps.accounts.models import APIKey
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
+
+    if not scene.narration:
+        return JsonResponse({'success': False, 'message': '나레이션이 없습니다.'})
+
+    model_type = request.POST.get('model_type', '2.5-flash')
+    MODELS = {
+        '2.5-flash': 'gemini-2.5-flash',
+        '2.5-pro': 'gemini-2.5-pro',
+        'flash': 'gemini-3-flash-preview',
+        'pro': 'gemini-3-pro-preview',
+    }
+    model_name = MODELS.get(model_type, MODELS['2.5-flash'])
+
+    api_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+    if not api_key_obj:
+        api_key_obj = APIKey.objects.filter(user=request.user, service='gemini').first()
+    if not api_key_obj:
+        return JsonResponse({'success': False, 'message': 'Gemini API 키가 없습니다.'})
+
+    try:
+        client = genai.Client(api_key=api_key_obj.get_key())
+
+        prompt = f"""다음 텍스트를 TTS(음성 합성)용으로 변환해주세요.
+
+## 핵심 규칙
+**원본 띄어쓰기를 그대로 유지! 단어 개수가 절대 변하면 안 됨!**
+
+## 변환 예시
+- 원본에 띄어쓰기 없으면 → 변환 후에도 없음: "100달러" → "백달러", "1시간" → "한시간"
+- 원본에 띄어쓰기 있으면 → 변환 후에도 있음: "100 달러" → "백 달러", "1 시간" → "한 시간"
+- 연도: "2030년" → "이천삼십년"
+- 금액: "2천만원" → "이천만원", "2천만 원" → "이천만 원"
+- 퍼센트: "50%" → "오십퍼센트"
+- 날짜: "1월1일" → "일월일일", "1월 1일" → "일월 일일"
+
+## 금지사항
+- 띄어쓰기 추가 금지
+- 띄어쓰기 삭제 금지
+- 단어 분리/병합 금지
+
+## 원문
+{scene.narration}
+
+변환된 텍스트만 출력 (설명 없이):"""
+
+        response = client.models.generate_content(model=model_name, contents=prompt)
+        narration_tts = response.text.strip()
+
+        scene.narration_tts = narration_tts
+        scene.save(update_fields=['narration_tts'])
+
+        return JsonResponse({'success': True, 'narration_tts': narration_tts})
+
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e)[:200]})
+
+
+@login_required
+@require_POST
+def convert_all_tts(request, pk):
+    """전체 씬 TTS 텍스트 변환 (Gemini)"""
+    from google import genai
+    from apps.accounts.models import APIKey
+    import re as re_module
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+
+    model_type = request.POST.get('model_type', '2.5-flash')
+    MODELS = {
+        '2.5-flash': 'gemini-2.5-flash',
+        '2.5-pro': 'gemini-2.5-pro',
+        'flash': 'gemini-3-flash-preview',
+        'pro': 'gemini-3-pro-preview',
+    }
+    model_name = MODELS.get(model_type, MODELS['2.5-flash'])
+
+    api_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+    if not api_key_obj:
+        api_key_obj = APIKey.objects.filter(user=request.user, service='gemini').first()
+    if not api_key_obj:
+        return JsonResponse({'success': False, 'message': 'Gemini API 키가 없습니다.'})
+
+    scenes = list(project.scenes.filter(
+        narration__isnull=False
+    ).exclude(narration='').order_by('scene_number'))
+
+    if not scenes:
+        return JsonResponse({'success': False, 'message': '나레이션이 있는 씬이 없습니다.'})
+
+    try:
+        client = genai.Client(api_key=api_key_obj.get_key())
+
+        results = []
+        errors = 0
+        batch_size = 10
+
+        for i in range(0, len(scenes), batch_size):
+            batch = scenes[i:i + batch_size]
+
+            scenes_text = ""
+            for scene in batch:
+                scenes_text += f"[씬 {scene.scene_number}]\n{scene.narration}\n\n"
+
+            prompt = f"""다음 텍스트들을 TTS(음성 합성)용으로 변환해주세요.
+
+## 핵심 규칙
+**원본 띄어쓰기를 그대로 유지! 단어 개수가 절대 변하면 안 됨!**
+
+## 변환 예시
+- 원본에 띄어쓰기 없으면 → 변환 후에도 없음: "100달러" → "백달러", "1시간" → "한시간"
+- 원본에 띄어쓰기 있으면 → 변환 후에도 있음: "100 달러" → "백 달러", "1 시간" → "한 시간"
+- 연도: "2030년" → "이천삼십년"
+- 금액: "2천만원" → "이천만원", "2천만 원" → "이천만 원"
+- 퍼센트: "50%" → "오십퍼센트"
+- 날짜: "1월1일" → "일월일일", "1월 1일" → "일월 일일"
+
+## 금지사항
+- 띄어쓰기 추가 금지
+- 띄어쓰기 삭제 금지
+- 단어 분리/병합 금지
+
+## 원문
+{scenes_text}
+
+## 출력 형식
+[씬 N]
+변환된 텍스트
+
+[씬 N]
+변환된 텍스트
+..."""
+
+            response = client.models.generate_content(model=model_name, contents=prompt)
+            response_text = response.text.strip()
+
+            # 파싱
+            parts = re_module.split(r'\[씬\s*\d+\]\s*\n', response_text)
+            parsed = []
+            for part in parts[1:]:
+                text = part.strip()
+                if '\n\n' in text:
+                    text = text.split('\n\n')[0]
+                text = text.strip()
+                if text:
+                    parsed.append(text)
+
+            for j, scene in enumerate(batch):
+                if j < len(parsed):
+                    scene.narration_tts = parsed[j]
+                    scene.save(update_fields=['narration_tts'])
+                    results.append({'scene': scene.scene_number, 'tts': parsed[j]})
+                else:
+                    errors += 1
+
+        return JsonResponse({
+            'success': True,
+            'results': results,
+            'converted': len(results),
+            'errors': errors,
+        })
+
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': str(e)[:200]})
+
+
+@login_required
+@require_POST
+def delete_all_tts_text(request, pk):
+    """모든 씬의 TTS 텍스트 삭제"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    count = project.scenes.exclude(narration_tts='').update(narration_tts='')
+    return JsonResponse({'success': True, 'message': f'TTS 텍스트 {count}개 삭제됨'})
+
+
+@login_required
+@require_POST
+def delete_all_image_prompts(request, pk):
+    """모든 씬의 이미지 프롬프트 삭제"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    count = project.scenes.exclude(image_prompt='').update(image_prompt='')
+    return JsonResponse({'success': True, 'message': f'이미지 프롬프트 {count}개 삭제됨'})
+
+
+@login_required
+@require_POST
+def delete_mismatch_audio(request, pk):
+    """자막 불일치 씬의 오디오 삭제"""
+    import os
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    mismatch_scenes = project.scenes.filter(subtitle_status='mismatch')
+
+    deleted_count = 0
+    for scene in mismatch_scenes:
+        if scene.audio:
+            try:
+                if os.path.exists(scene.audio.path):
+                    os.remove(scene.audio.path)
+            except Exception:
+                pass
+            scene.audio = ''
+            scene.audio_duration = 0
+        if scene.subtitle_file:
+            try:
+                if os.path.exists(scene.subtitle_file.path):
+                    os.remove(scene.subtitle_file.path)
+            except Exception:
+                pass
+            scene.subtitle_file = ''
+        scene.subtitle_status = 'none'
+        scene.subtitle_word_count = 0
+        scene.save()
+        deleted_count += 1
+
+    return JsonResponse({'success': True, 'message': f'불일치 오디오 {deleted_count}개 삭제됨', 'count': deleted_count})
 
 
 @login_required
@@ -1237,6 +1471,15 @@ def generate_upload_info(request, pk):
 
     total_duration = current_time
 
+    # script_plan 가져오기
+    script_plan = ''
+    try:
+        research = project.research
+        if research and research.content_analysis:
+            script_plan = research.content_analysis.get('script_plan', '')
+    except Exception:
+        pass
+
     # 토큰 사용량 추적용
     token_info = {'input': 0, 'output': 0, 'total': 0, 'cost': '0.0000'}
 
@@ -1261,12 +1504,22 @@ def generate_upload_info(request, pk):
         total_mins = int(total_duration // 60)
         total_secs = int(total_duration % 60)
 
+        # script_plan 섹션 추가
+        script_plan_section = ""
+        if script_plan:
+            import json as json_mod
+            script_plan_text = json_mod.dumps(script_plan, ensure_ascii=False, indent=2) if isinstance(script_plan, (dict, list)) else str(script_plan)
+            script_plan_section = f"""
+## 대본 생성 계획
+{script_plan_text}
+"""
+
         prompt = f"""YouTube 영상 업로드 정보를 생성해주세요.
 
 ## 영상 정보
 - 총 길이: {total_mins}분 {total_secs}초
 - 씬 개수: {len(scene_info_list)}개
-
+{script_plan_section}
 ## 전체 씬 (시간 + 나레이션)
 {scenes_text}
 
@@ -1632,7 +1885,7 @@ def _get_default_prompt(agent_name: str) -> str:
         return ResearcherService.DEFAULT_PROMPT
     elif agent_name == 'scene_planner':
         from apps.pipeline.services.scene_planner import ScenePlannerService
-        return ScenePlannerService.DEFAULT_PROMPT
+        return getattr(ScenePlannerService, 'DEFAULT_PROMPT', '')
     elif agent_name == 'image_prompter':
         from apps.pipeline.services.image_prompter import ImagePrompterService
         return getattr(ImagePrompterService, 'DEFAULT_PROMPT', '')

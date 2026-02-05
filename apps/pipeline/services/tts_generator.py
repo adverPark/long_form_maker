@@ -148,14 +148,17 @@ class TTSGeneratorService(BaseStepService):
         self._lock = threading.Lock()  # 스레드 안전을 위한 락
         self.log('TTS 생성 시작')
 
-        # DB에서 씬 가져오기
-        scenes = list(self.project.scenes.all().order_by('scene_number'))
+        # DB에서 씬 가져오기 (TTS 변환된 것만)
+        scenes = list(self.project.scenes.filter(
+            narration_tts__isnull=False
+        ).exclude(narration_tts='').order_by('scene_number'))
 
         if not scenes:
-            raise ValueError('씬이 없습니다. 씬 분할을 먼저 완료해주세요.')
+            raise ValueError('TTS 변환된 씬이 없습니다. TTS 변환을 먼저 실행해주세요.')
 
         total = len(scenes)
-        self.log(f'총 {total}개 씬 로드')
+        all_scenes = self.project.scenes.count()
+        self.log(f'TTS 변환된 씬: {total}개 / 전체: {all_scenes}개')
 
         # 음성 프리셋 정보 로깅
         voice = self.project.voice

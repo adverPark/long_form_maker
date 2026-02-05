@@ -27,6 +27,8 @@ urlpatterns = [
     path('project/<int:pk>/scene/<int:scene_number>/generate-tts/', views.scene_generate_tts, name='scene_generate_tts'),
     path('project/<int:pk>/scene/<int:scene_number>/edit/', views.scene_edit, name='scene_edit'),
     path('project/<int:pk>/scene/<int:scene_number>/delete/', views.scene_delete, name='scene_delete'),
+    path('project/<int:pk>/scene/<int:scene_number>/convert-tts/', views.scene_convert_tts, name='scene_convert_tts'),
+    path('project/<int:pk>/convert-all-tts/', views.convert_all_tts, name='convert_all_tts'),
 
     # 병렬 실행
     path('project/<int:pk>/step/parallel/', views.step_execute_parallel, name='step_execute_parallel'),
@@ -38,6 +40,9 @@ urlpatterns = [
     path('project/<int:pk>/delete-final-video/', views.delete_final_video, name='delete_final_video'),
     path('project/<int:pk>/delete-all-audio/', views.delete_all_audio, name='delete_all_audio'),
     path('project/<int:pk>/delete-all-images/', views.delete_all_images, name='delete_all_images'),
+    path('project/<int:pk>/delete-all-tts-text/', views.delete_all_tts_text, name='delete_all_tts_text'),
+    path('project/<int:pk>/delete-all-image-prompts/', views.delete_all_image_prompts, name='delete_all_image_prompts'),
+    path('project/<int:pk>/delete-mismatch-audio/', views.delete_mismatch_audio, name='delete_mismatch_audio'),
 
     # 업로드 정보
     path('project/<int:pk>/upload-info/', views.upload_info, name='upload_info'),

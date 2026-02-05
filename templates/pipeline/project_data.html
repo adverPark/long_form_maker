@@ -773,66 +773,84 @@
             </small>
             {% endif %}
         </div>
-        <div onclick="event.stopPropagation();">
-            <!-- 씬 분할 프롬프트 편집 -->
-            <button class="btn btn-sm btn-outline-secondary" onclick="openPromptModal('scene_planner', 'Scene Planner')">
-                <i class="bi bi-sliders"></i> 프롬프트
-            </button>
-            <!-- 씬 분할 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_planner' %}" class="d-inline ajax-step-form">
-                {% csrf_token %}
-                <div class="input-group input-group-sm d-inline-flex" style="width: auto;">
-                    <select name="model_type" class="form-select form-select-sm" style="width: auto;">
-                        <option value="2.5-flash" selected>2.5 Flash</option>
-                        <option value="2.5-pro">2.5 Pro</option>
-                        <option value="flash">3 Flash</option>
-                        <option value="pro">3 Pro</option>
-                    </select>
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-grid-3x3"></i> 씬분할
-                    </button>
-                </div>
-            </form>
-            <!-- 프롬프트 생성 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="d-inline ms-2 ajax-step-form">
-                {% csrf_token %}
-                <div class="input-group input-group-sm d-inline-flex" style="width: auto;">
-                    <select name="model_type" class="form-select form-select-sm" style="width: auto;">
-                        <option value="2.5-flash" selected>2.5 Flash</option>
-                        <option value="2.5-pro">2.5 Pro</option>
-                        <option value="flash">3 Flash</option>
-                        <option value="pro">3 Pro</option>
-                    </select>
-                    <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
-                        <i class="bi bi-chat-text"></i> 프롬프트
-                    </button>
-                </div>
-                <label class="form-check form-check-inline mb-0 ms-1" style="font-size: 0.85em;" title="Flash 모델용: 이미지에 텍스트 넣지 않음">
-                    <input type="checkbox" name="no_text" value="1" class="form-check-input">
-                    <span class="form-check-label">한글금지</span>
-                </label>
-            </form>
-            <!-- 전체 이미지 생성 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ms-2 ajax-step-form">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <i class="bi bi-images"></i> 이미지
-                </button>
-            </form>
-            <!-- 전체 TTS 생성 -->
-            <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ms-1 ajax-step-form">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
-                    <i class="bi bi-mic"></i> TTS
-                </button>
-            </form>
-        </div>
     </div>
     <div class="collapse" id="scenes-body">
         <div class="step-body p-0">
+            <!-- 씬 작업 버튼 -->
+            <div class="p-2 border-bottom bg-light">
+                <div class="d-flex flex-wrap gap-3 align-items-center" style="font-size: 0.9em;">
+                    <!-- 씬 분할 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_planner' %}" class="d-inline ajax-step-form">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-grid-3x3"></i> 씬 분할 새로하기
+                        </button>
+                    </form>
+
+                    <!-- 이미지 프롬프트 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'image_prompter' %}" class="ajax-step-form">
+                        {% csrf_token %}
+                        <span class="me-1">이미지 프롬프트 :</span>
+                        <select name="model_type" class="form-select form-select-sm d-inline" style="width: auto;">
+                            <option value="2.5-flash" selected>2.5 Flash</option>
+                            <option value="2.5-pro">2.5 Pro</option>
+                            <option value="flash">3 Flash</option>
+                            <option value="pro">3 Pro</option>
+                        </select>
+                        <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
+                            생성
+                        </button>
+                        <label class="form-check-inline mb-0 ms-1" style="font-size: 0.85em;">
+                            <input type="checkbox" name="no_text" value="1" class="form-check-input">
+                            <span>한글금지</span>
+                        </label>
+                    </form>
+
+                    <!-- TTS 문구 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_converter' %}" class="ajax-step-form">
+                        {% csrf_token %}
+                        <span class="me-1">TTS 문구 :</span>
+                        <select name="model_type" class="form-select form-select-sm d-inline" style="width: auto;">
+                            <option value="2.5-flash" selected>2.5 Flash</option>
+                            <option value="2.5-pro">2.5 Pro</option>
+                            <option value="flash">3 Flash</option>
+                            <option value="pro">3 Pro</option>
+                        </select>
+                        <button type="submit" class="btn btn-sm btn-outline-primary" {% if scenes.count == 0 %}disabled{% endif %}>
+                            생성
+                        </button>
+                    </form>
+
+                    <!-- 이미지 생성 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ajax-step-form">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
+                            <i class="bi bi-images"></i> 이미지 생성하기
+                        </button>
+                    </form>
+
+                    <!-- TTS 생성 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ajax-step-form">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
+                            <i class="bi bi-mic"></i> TTS 생성하기
+                        </button>
+                    </form>
+                </div>
+            </div>
+
             {% if scenes.count > 0 %}
-            <!-- 전체 삭제 버튼 -->
-            <div class="d-flex gap-2 p-2 border-bottom bg-light">
+            <!-- 삭제 버튼 -->
+            <div class="d-flex gap-2 p-2 border-bottom" style="background: #fff8f8;">
+                <button class="btn btn-sm btn-outline-info" onclick="deleteMismatchAudio()">
+                    <i class="bi bi-arrow-repeat"></i> 불일치 TTS 재생성
+                </button>
+                <button class="btn btn-sm btn-outline-warning" onclick="deleteAllImagePrompts()">
+                    <i class="bi bi-trash"></i> 이미지프롬프트 삭제
+                </button>
+                <button class="btn btn-sm btn-outline-warning" onclick="deleteAllTtsText()">
+                    <i class="bi bi-trash"></i> TTS텍스트 삭제
+                </button>
                 <button class="btn btn-sm btn-outline-danger" onclick="deleteAllImages()">
                     <i class="bi bi-trash"></i> 이미지 전체 삭제
                 </button>
@@ -869,6 +887,13 @@
                              data-field="narration"
                              onblur="saveField(this)"
                              onkeydown="handleEditKey(event, this)">{{ scene.narration }}</div>
+                        <div class="tts-text mt-1 editable-text"
+                             contenteditable="true"
+                             data-scene="{{ scene.scene_number }}"
+                             data-field="narration_tts"
+                             onblur="saveField(this)"
+                             onkeydown="handleEditKey(event, this)"
+                             style="font-size: 0.75em; color: #888;">{% if scene.narration_tts %}{{ scene.narration_tts }}{% else %}<span class="text-muted fst-italic">TTS 없음</span>{% endif %}</div>
                     </div>
                     <div class="scene-prompt">
                         <div class="prompt-text editable-text"
@@ -1798,6 +1823,73 @@ async function deleteAllAudio() {
     }
 }
 
+async function deleteAllTtsText() {
+    if (!confirm('모든 씬의 TTS 텍스트를 삭제하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_all_tts_text" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+async function deleteAllImagePrompts() {
+    if (!confirm('모든 씬의 이미지 프롬프트를 삭제하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_all_image_prompts" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert(data.message || '삭제 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+async function deleteMismatchAudio() {
+    if (!confirm('자막 불일치 씬의 TTS텍스트 + 오디오를 삭제합니다.\n\n삭제 후 [TTS 문구 생성] → [TTS 생성하기] 순서로 실행하세요.\n\n계속하시겠습니까?')) return;
+
+    try {
+        const response = await fetch('{% url "pipeline:delete_mismatch_audio" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            if (data.count > 0) {
+                alert(data.message + '\n\n[TTS 문구 생성] → [TTS 생성하기] 순서로 실행하세요.');
+                location.reload();
+            } else {
+                alert('불일치 씬이 없습니다.');
+            }
+        } else {
+            alert(data.message || '실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
 // 영상 제작 초기화 (임시 파일 삭제, 씬 영상은 유지)
 async function deleteFinalVideo() {
     if (!confirm('영상 편집 파일을 삭제합니다:\n\n• 최종 영상\n• 임시 클립\n• ASS 자막\n• 전체 자막\n\n※ 씬 영상(인트로)은 유지됩니다.\n\n삭제 후 "최종편집"을 다시 실행하세요.\n\n계속하시겠습니까?')) return;
@@ -1846,7 +1938,7 @@ async function generateUploadInfo() {
     const btn = event.target.closest('button');
     const originalText = btn.innerHTML;
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 생성 중...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 시작 중...';
 
     // 모델 선택
     const modelType = document.getElementById('upload-model-select').value;
@@ -1858,40 +1950,22 @@ async function generateUploadInfo() {
             method: 'POST',
             headers: {
                 'X-CSRFToken': '{{ csrf_token }}',
+                'X-Requested-With': 'XMLHttpRequest',
             },
             body: formData
         });
         const data = await response.json();
 
         if (data.success) {
-            document.getElementById('upload-title').value = data.title || '';
-            document.getElementById('upload-description').value = data.description || '';
-            document.getElementById('upload-tags').value = data.tags ? data.tags.join(', ') : '';
-            document.getElementById('thumbnail-prompt').value = data.thumbnail_prompt || '';
-            document.getElementById('full-description').value = data.full_description || '';
-
-            // 타임라인 표시
-            const timelineDiv = document.getElementById('upload-timeline');
-            if (data.timeline && data.timeline.length > 0) {
-                timelineDiv.innerHTML = data.timeline.map(t => `${t.time} ${t.title}`).join('<br>');
-            }
-
-            // 제목 글자수 업데이트
-            titleCountSpan.textContent = (data.title || '').length;
-
-            // 토큰 정보 표시
-            const tokenInfoSpan = document.getElementById('upload-token-info');
-            if (data.token_info && data.token_info.total > 0) {
-                tokenInfoSpan.innerHTML = `<i class="bi bi-coin"></i> ${data.token_info.total.toLocaleString()} 토큰 ($${data.token_info.cost})`;
-            }
-
-            alert('업로드 정보가 생성되었습니다.');
+            showToast(data.message || '업로드 정보 생성이 시작되었습니다.', 'success');
+            setTimeout(() => location.reload(), 1000);
         } else {
-            alert(data.message || '생성 실패');
+            showToast(data.message || '생성 실패', 'danger');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
         }
     } catch (error) {
-        alert('오류: ' + error.message);
-    } finally {
+        showToast('오류: ' + error.message, 'danger');
         btn.disabled = false;
         btn.innerHTML = originalText;
     }
@@ -2173,6 +2247,166 @@ if (typeof marked !== 'undefined') {
         researchMd.innerHTML = marked.parse(researchData.textContent);
     }
 }
+
+// =============================================
+// TTS 보기/수정
+// =============================================
+
+function toggleTts(sceneNumber) {
+    const section = document.getElementById(`tts-${sceneNumber}`);
+    if (section) {
+        section.style.display = section.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+async function regenerateTts(sceneNumber) {
+    if (!confirm('TTS 텍스트를 다시 생성하시겠습니까?\n(숫자→한글 변환 규칙 재적용)')) return;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    try {
+        const formData = new FormData();
+        formData.append('regenerate_tts', 'true');
+
+        const response = await fetch(`{% url 'pipeline:scene_edit' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            // TTS 텍스트 업데이트
+            const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+            if (ttsText && data.narration_tts) {
+                ttsText.textContent = data.narration_tts;
+            }
+            showToast('TTS 텍스트가 재생성되었습니다.');
+        } else {
+            alert(data.message || 'TTS 재생성 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+async function saveTtsText(sceneNumber) {
+    const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+    if (!ttsText) return;
+
+    try {
+        const formData = new FormData();
+        formData.append('narration_tts', ttsText.textContent.trim());
+
+        const response = await fetch(`{% url 'pipeline:scene_edit' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            showToast('TTS 텍스트가 저장되었습니다.');
+        } else {
+            alert(data.message || 'TTS 저장 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    }
+}
+
+async function convertTtsAI(sceneNumber) {
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    const modelType = document.getElementById('tts-model-select')?.value || '2.5-flash';
+    const formData = new FormData();
+    formData.append('model_type', modelType);
+
+    try {
+        const response = await fetch(`{% url 'pipeline:scene_convert_tts' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData,
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const ttsText = document.querySelector(`#tts-${sceneNumber} .tts-text`);
+            if (ttsText && data.narration_tts) {
+                ttsText.textContent = data.narration_tts;
+            }
+            showToast('AI TTS 변환 완료');
+        } else {
+            alert(data.message || 'TTS 변환 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+async function convertAllTtsAI() {
+    if (!confirm('전체 씬의 TTS 텍스트를 AI로 변환하시겠습니까?')) return;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 변환 중...';
+
+    const modelType = document.getElementById('tts-model-select').value;
+    const formData = new FormData();
+    formData.append('model_type', modelType);
+
+    try {
+        const response = await fetch("{% url 'pipeline:convert_all_tts' project.pk %}", {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+            body: formData,
+        });
+
+        // HTML 응답인지 확인 (에러 페이지)
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            console.error('Non-JSON response:', text.substring(0, 500));
+            throw new Error(`서버 오류 (${response.status}): ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+            // 각 씬의 TTS 텍스트 업데이트
+            for (const result of data.results) {
+                const ttsText = document.querySelector(`#tts-${result.scene} .tts-text`);
+                if (ttsText) {
+                    ttsText.textContent = result.tts;
+                }
+            }
+            showToast(`TTS 변환 완료: ${data.converted}개 씬`);
+            if (data.errors > 0) {
+                alert(`${data.errors}개 씬 변환 실패`);
+            }
+        } else {
+            alert(data.message || 'TTS 변환 실패');
+        }
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
 </script>
 
 <!-- 자동 생성 모달 -->
@@ -2187,17 +2421,39 @@ if (typeof marked !== 'undefined') {
                 {% csrf_token %}
                 <div class="modal-body">
                     {% if topic.video_id %}
-                    <p class="text-muted small"><span class="badge bg-danger me-1"><i class="bi bi-youtube"></i></span>YouTube 수집 → 콘텐츠 분석 → 리서치 → 대본 → 씬분할 → 이미지 프롬프트 → 이미지 생성까지 자동 실행됩니다.</p>
+                    <p class="text-muted small"><span class="badge bg-danger me-1"><i class="bi bi-youtube"></i></span>YouTube 수집 → 자막분석 → 댓글분석 → 대본계획 → 리서치 → 대본 → 씬분할 → TTS → 이미지 → 영상생성 → 영상조립까지 자동 실행됩니다.</p>
 
                     <div class="mb-3">
-                        <label class="form-label fw-bold">콘텐츠 분석</label>
-                        <select name="model_content_analyzer" class="form-select form-select-sm">
+                        <label class="form-label fw-bold">자막 분석</label>
+                        <select name="model_transcript_analyzer" class="form-select form-select-sm">
                             <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">댓글 분석</label>
+                        <select name="model_comment_analyzer" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">대본 계획</label>
+                        <select name="model_script_planner" class="form-select form-select-sm">
+                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="pro">3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
                     {% else %}
-                    <p class="text-muted small">리서치 → 대본 → 씬분할 → 이미지 프롬프트 → 이미지 생성까지 자동 실행됩니다.</p>
+                    <p class="text-muted small">리서치 → 대본 → 씬분할 → TTS → 이미지 프롬프트 → 이미지 → 영상생성 → 영상조립까지 자동 실행됩니다.</p>
                     {% endif %}
 
                     <div class="mb-3">
@@ -2220,15 +2476,7 @@ if (typeof marked !== 'undefined') {
                         </select>
                     </div>
 
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">씬 분할</label>
-                        <select name="model_scene_planner" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
-                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
-                            <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
-                        </select>
-                    </div>
+                    <p class="text-muted small mb-2"><i class="bi bi-info-circle"></i> 씬 분할은 규칙 기반으로 동작 (모델 불필요)</p>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">이미지 프롬프트</label>

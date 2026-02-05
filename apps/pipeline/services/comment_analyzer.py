@@ -139,8 +139,9 @@ class CommentAnalyzerService(BaseStepService):
 
     def _save_analysis(self, research: Research, result: str):
         """분석 결과를 Research에 저장 (Markdown 텍스트)"""
-        existing = research.content_analysis or {}
+        # DB에서 최신 content_analysis를 직접 읽어서 업데이트 (레이스 컨디션 방지)
+        fresh = Research.objects.filter(pk=research.pk).values_list('content_analysis', flat=True).first()
+        existing = fresh or {}
         existing['comment_analysis'] = result
-        research.content_analysis = existing
-        research.save()
+        Research.objects.filter(pk=research.pk).update(content_analysis=existing)
         self.log(f'댓글 분석 저장 완료: Research ID={research.pk}')

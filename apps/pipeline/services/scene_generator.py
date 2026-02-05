@@ -250,10 +250,12 @@ class SceneGeneratorService(BaseStepService):
                 except Exception as e:
                     self._thread_log(f'씬{scene_num} 스타일 샘플 로드 실패: {e}', 'error')
 
-            # 스타일 참조 지시 추가 (이미지 설명 포함)
+            # 스타일 참조 지시 추가 (프롬프트 있으면 포함, 없으면 이미지만)
             if style_images_added > 0:
-                style_desc = style.style_prompt if style.style_prompt else "the reference images"
-                contents[0] = f"Use the reference images for background and artistic style. Style: {style_desc}\n\n{contents[0]}"
+                if style.style_prompt:
+                    contents[0] = f"Use the reference images for style. Style: {style.style_prompt}\n\n{contents[0]}"
+                else:
+                    contents[0] = f"Use the reference images for style.\n\n{contents[0]}"
 
         # 캐릭터 씬이면 캐릭터 이미지 추가
         character = self.project.character
@@ -261,8 +263,11 @@ class SceneGeneratorService(BaseStepService):
             try:
                 char_img = Image.open(character.image.path)
                 contents.append(char_img)
-                # 캐릭터 참조 지시 추가
-                contents[0] = f"Include the character from the reference image.\n\n{contents[0]}"
+                # 캐릭터 참조 지시 추가 (프롬프트 있으면 포함, 없으면 이미지만)
+                if character.character_prompt:
+                    contents[0] = f"Include this character: {character.character_prompt}\n\n{contents[0]}"
+                else:
+                    contents[0] = f"Include the character from the reference image.\n\n{contents[0]}"
             except Exception as e:
                 self._thread_log(f'씬{scene_num} 캐릭터 이미지 로드 실패: {e}', 'error')
 
@@ -341,8 +346,27 @@ class SceneGeneratorService(BaseStepService):
         # 프롬프트 구성 - 상황 묘사에 집중
         base_prompt = scene.image_prompt or ''
 
+        # Replicate는 참조 이미지를 사용할 수 없으므로 스타일/캐릭터 프롬프트를 텍스트에 포함
+        style = self.project.image_style
+        character = self.project.character
+
+        prompt_parts = []
+
+        # 스타일 프롬프트 추가
+        if style and style.style_prompt:
+            prompt_parts.append(f"Style: {style.style_prompt}")
+
+        # 캐릭터 프롬프트 추가 (캐릭터 등장 씬이면)
+        if scene.has_character and character and character.prompt:
+            prompt_parts.append(f"Character: {character.prompt}")
+
+        # 기본 프롬프트
+        prompt_parts.append(base_prompt)
+
         # 16:9 비율 명시
-        prompt = f"{base_prompt}, 16:9 aspect ratio, professional quality"
+        prompt_parts.append("16:9 aspect ratio, professional quality")
+
+        prompt = ", ".join(prompt_parts)
 
         max_retries = 3
         for attempt in range(max_retries):

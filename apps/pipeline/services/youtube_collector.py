@@ -79,14 +79,27 @@ class YouTubeCollectorService(BaseStepService):
         return ''
 
     def _fetch_subtitles(self, url: str) -> tuple:
-        """yt-dlp로 자막 수집
+        """yt-dlp로 자막 수집, 실패 시 youtube-transcript-api 폴백
 
         Returns:
             tuple: (transcript_text, language, is_auto_generated)
         """
+        video_id = self._extract_video_id(url)
+
+        # 1차: yt-dlp 시도
+        transcript_text, language, is_auto = self._fetch_subtitles_ytdlp(url)
+
+        if transcript_text:
+            return transcript_text, language, is_auto
+
+        # 2차: youtube-transcript-api 폴백
+        self.log('yt-dlp 자막 실패, youtube-transcript-api로 재시도...', 'warning')
+        return self._fetch_subtitles_transcript_api(video_id)
+
+    def _fetch_subtitles_ytdlp(self, url: str) -> tuple:
+        """yt-dlp로 자막 수집"""
         import yt_dlp
 
-        # 임시 디렉토리 사용
         with tempfile.TemporaryDirectory() as tmpdir:
             ydl_opts = {
                 'skip_download': True,
@@ -103,11 +116,9 @@ class YouTubeCollectorService(BaseStepService):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
 
-                    # 자막 정보 확인
                     subtitles = info.get('subtitles', {})
                     auto_captions = info.get('automatic_captions', {})
 
-                    # 한국어 우선, 없으면 영어
                     transcript_text = ''
                     language = ''
                     is_auto = False
@@ -115,12 +126,10 @@ class YouTubeCollectorService(BaseStepService):
                     # 수동 자막 먼저 시도
                     for lang_code in ['ko', 'en']:
                         if lang_code in subtitles:
-                            # 수동 자막 다운로드
                             ydl_opts['subtitleslangs'] = [lang_code]
                             with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
                                 ydl2.download([url])
 
-                            # json3 파일 읽기
                             sub_files = list(Path(tmpdir).glob(f'*.{lang_code}.json3'))
                             if sub_files:
                                 transcript_text = self._parse_json3_subtitle(sub_files[0])
@@ -148,8 +157,34 @@ class YouTubeCollectorService(BaseStepService):
                     return transcript_text, language, is_auto
 
             except Exception as e:
-                self.log(f'자막 수집 오류: {str(e)}', 'error')
+                self.log(f'yt-dlp 자막 수집 오류: {str(e)}', 'error')
                 return '', '', False
+
+    def _fetch_subtitles_transcript_api(self, video_id: str) -> tuple:
+        """youtube-transcript-api로 자막 수집 (폴백)"""
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+
+            api = YouTubeTranscriptApi()
+            transcript_list = api.list(video_id)
+
+            # 한국어/영어 자막 찾기 (수동 우선, 자동 포함)
+            transcript = transcript_list.find_transcript(['ko', 'en'])
+            snippets = transcript.fetch()
+            transcript_text = ' '.join(s.text for s in snippets)
+            transcript_text = re.sub(r'\s+', ' ', transcript_text).strip()
+            language = transcript.language_code[:2]
+            is_auto = transcript.is_generated
+
+            self.log(f'youtube-transcript-api 자막 수집 성공: {len(transcript_text)}자 ({language}, 자동생성: {is_auto})')
+            return transcript_text, language, is_auto
+
+        except ImportError:
+            self.log('youtube-transcript-api 패키지 미설치', 'error')
+            return '', '', False
+        except Exception as e:
+            self.log(f'youtube-transcript-api 자막 수집 실패: {str(e)}', 'error')
+            return '', '', False
 
     def _parse_json3_subtitle(self, filepath: Path) -> str:
         """json3 형식 자막 파일 파싱"""

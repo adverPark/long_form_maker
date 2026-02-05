@@ -1,7 +1,14 @@
 import json
 import re
+from pydantic import BaseModel, Field
 from .base import BaseStepService
 from apps.pipeline.models import Draft
+
+
+class ScriptResponse(BaseModel):
+    """대본 응답 스키마 - 구조화 출력 강제"""
+    title: str = Field(description="영상 제목 (30자 이내)")
+    content: str = Field(description="순수 대본 텍스트만. 타임스탬프, 섹션마커, 구분선, 메타설명 절대 금지. 시청자가 바로 들을 수 있는 나레이션만.")
 
 
 class ScriptWriterService(BaseStepService):
@@ -24,22 +31,42 @@ class ScriptWriterService(BaseStepService):
 
         self.update_progress(10, '대본 구조 설계 중...')
 
-        # 시스템 프롬프트 (대본 작성 가이드)
+        # 대본 계획 + 리서치 결과 확인 로그
+        content_analysis = research_data.get('content_analysis', {})
+        script_plan = content_analysis.get('script_plan', '')
+        research_result = content_analysis.get('research_result', '')
+
+        self.log(f'대본 계획: {len(script_plan)}자' + (f' (처음 200자: {script_plan[:200]}...)' if script_plan else ' (없음)'))
+        self.log(f'리서치 결과: {len(research_result)}자' + (f' (처음 200자: {research_result[:200]}...)' if research_result else ' (없음)'))
+
+        # 시스템 프롬프트 (대본 작성 가이드 - DB에서만)
         system_prompt = self._build_system_prompt()
+        self.log(f'시스템 프롬프트 길이: {len(system_prompt)}자')
 
         # 사용자 프롬프트 (리서치 자료 포함)
         user_prompt = self._build_user_prompt(research_data)
+        self.log(f'사용자 프롬프트 길이: {len(user_prompt)}자')
 
-        # Gemini 호출
+        # Gemini 호출 (구조화 출력)
         self.update_progress(20, 'AI 대본 생성 중...')
-        self.log('대본 생성 시작')
+        self.log('대본 생성 시작 (구조화 출력)')
 
         full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
-        response = self.call_gemini(full_prompt)
 
-        # 응답에서 대본 추출
+        try:
+            response_data = self.call_gemini_json(full_prompt, ScriptResponse)
+            draft_data = {
+                'title': response_data.get('title', research_data.get('topic', '제목 없음')),
+                'content': response_data.get('content', ''),
+            }
+        except Exception as e:
+            self.log(f'구조화 출력 실패, 일반 호출로 재시도: {str(e)[:100]}', 'warning')
+            response = self.call_gemini(full_prompt)
+            draft_data = self._parse_response(response, research_data)
+
+        # 대본 정리
         self.update_progress(60, '대본 정제 중...')
-        draft_data = self._parse_response(response, research_data)
+        draft_data['content'] = self._clean_content(draft_data['content'])
 
         # 글자수 확인 및 보강 (1회만 시도)
         char_count = len(draft_data['content'])
@@ -49,20 +76,25 @@ class ScriptWriterService(BaseStepService):
         best_content = draft_data['content']
         best_count = char_count
 
-        # 7500자 미만이면 1회 보강 시도 (목표: 8000자 이상)
-        if char_count < 7500:
+        # 6000자 미만이면 1회 보강 시도 (목표: 8000자 이상)
+        if char_count < 6000:
             needed = 8000 - char_count
             self.update_progress(70, f'글자수 부족 ({char_count}자), 보강 중...')
             self.log(f'보강 시도: {char_count}자 → +{needed}자 필요')
 
             try:
-                # 리서치 전체 데이터
-                research_text = f"""주제: {research_data.get('topic', '')}
-요약: {research_data.get('summary', '')}
-인용구: {research_data.get('quotes', [])}
-숫자/통계: {research_data.get('numbers', [])}
-인물 사례: {research_data.get('person_stories', [])}"""
+                # 대본 계획 + 리서치 결과 (마크다운 그대로)
+                content_analysis = research_data.get('content_analysis', {})
+                script_plan_text = content_analysis.get('script_plan', '')
+                research_result_text = content_analysis.get('research_result', '')
 
+                research_text = f"""## 대본 계획
+{script_plan_text if script_plan_text else '(없음)'}
+
+## 리서치 결과
+{research_result_text if research_result_text else '(없음)'}"""
+
+                self.log(f'보강에 전달: 대본계획 {len(script_plan_text)}자, 리서치결과 {len(research_result_text)}자')
                 expanded = self._expand_content(draft_data['content'], needed, attempt=1, research_summary=research_text)
                 expanded_count = len(expanded)
 
@@ -86,7 +118,7 @@ class ScriptWriterService(BaseStepService):
         char_count = best_count
         self.log(f'최종 대본: {char_count}자')
 
-        if char_count < 7500:
+        if char_count < 6000:
             self.log(f'⚠️ 글자수 미달: {char_count}자', 'warning')
 
         # DB에 저장 (글자수 부족해도 반드시 저장)
@@ -214,6 +246,15 @@ class ScriptWriterService(BaseStepService):
 - 말하듯이 쓰기 (구어체)
 - 비트 시퀀스에 따른 전개
 - 글쓰기 기법 적용
+
+### 🚨 금지 사항 (절대 포함하지 마세요!)
+- **메타 설명 금지**: "다음은 요청하신 대로...", "아래는 대본입니다", "작성했습니다" 등
+- **섹션 마커 금지**: "[본론 시작 - 비트1: 제목]", "[마무리]" 같은 대괄호 섹션 표시
+- **구분선 금지**: "---", "===", "***" 같은 구분선
+- **타임스탬프 금지**: "(01:45)", "(00:00)" 같은 시간 표시
+- **작성 과정 설명 금지**: "~를 보강했습니다", "~를 추가했습니다" 등
+
+**출력은 순수 대본 텍스트만!** 시청자가 바로 들을 수 있는 나레이션만 작성하세요.
 
 ---
 
@@ -421,63 +462,51 @@ JSON 형식으로 출력하세요:
 {
   "title": "영상 제목 (30자 이내, 충격적/호기심 유발)",
   "hook": "첫 훅 문장",
-  "content": "순수 대본 텍스트 8000자 이상 (타임스탬프 포함)"
+  "content": "순수 대본 텍스트 8000자 이상"
 }
 ```
 
-### content 형식 (타임스탬프 포함):
+### content 작성 규칙
 
-[제목]
+**순수 나레이션만 작성!**
+- 타임스탬프 없이
+- 섹션 마커 없이
+- 구분선 없이
+- 시청자가 바로 들을 수 있는 문장만
 
-대본
-
-(00:00) [도입부]
-[내용]
-
-(00:45) 구독과 좋아요는 영상 끝나고 누르셔도 괜찮습니다. 자 바로 시작할게요.
-
-(01:00) [본론 시작]
-[비트1 내용]
-
-(02:30) [비트2]
-[내용]
-
-(04:00) [비트3]
-[내용]
-
-...
-
-(13:00) [마무리]
-[내용]
-
-(14:30) 오늘 영상은 여기까지입니다. 다음 시간에 더 날카로운 이야기로 찾아뵙겠습니다.
-
----
+**필수 포함 문장**:
+- 전환부: "구독과 좋아요는 영상 끝나고 누르셔도 괜찮습니다. 자 바로 시작할게요."
+- 클로징: "오늘 영상은 여기까지입니다. 다음 시간에 더 날카로운 이야기로 찾아뵙겠습니다."
 
 ## 출력 예시 (도입부만)
 
-"빚투 29조 시대" 레버리지의 달콤한 유혹, 그 끝에서 기다리는 것
-
-대본
-
-(00:00) 2024년 1월, 중국 상하이의 한 아파트에서 30대 남성이 발견됐습니다. 유서에는 이렇게 적혀 있었습니다. "레버리지 3배, 마진콜, 전 재산 증발." 그는 빚투로 2억을 벌었다가, 단 3일 만에 5억을 잃었습니다. 원금 3억에 빚 2억이 더해진 겁니다.
+2024년 1월, 중국 상하이의 한 아파트에서 30대 남성이 발견됐습니다. 유서에는 이렇게 적혀 있었습니다. "레버리지 3배, 마진콜, 전 재산 증발." 그는 빚투로 2억을 벌었다가, 단 3일 만에 5억을 잃었습니다. 원금 3억에 빚 2억이 더해진 겁니다.
 
 그런데 지금 한국에서 똑같은 일이 벌어지고 있습니다. 빚투 규모 29조. 역대 최대입니다. 코스닥 레버리지 ETF에 매일 수천억이 몰리고 있습니다. 5일 만에 60% 수익. 사람들은 환호합니다. "돈 복사다!"
 
 그런데 질문 하나 드리겠습니다. 그 60%가 -60%로 바뀌는 데 며칠이나 걸릴까요? 답은 3일입니다. 레버리지는 양날의 검이 아닙니다. 한쪽만 날카로운 칼입니다. 그리고 그 칼날은 당신을 향해 있습니다.
 
-(00:45) 구독과 좋아요는 영상 끝나고 누르셔도 괜찮습니다. 자 바로 시작할게요.'''
+구독과 좋아요는 영상 끝나고 누르셔도 괜찮습니다. 자 바로 시작할게요.'''
 
     def _build_system_prompt(self) -> str:
-        """시스템 프롬프트 생성 (DB에서 불러오거나 기본값 사용)"""
+        """시스템 프롬프트 생성 (DB에서만 가져옴 - DEFAULT_PROMPT 사용 안함)"""
         # DB에서 프롬프트 가져오기
         db_prompt = self.get_prompt()
         if db_prompt:
+            self.log(f'DB 프롬프트 사용: {len(db_prompt)}자')
             return db_prompt
 
-        # DB에 프롬프트가 없으면 기본 프롬프트 사용
-        self.log('DB에 프롬프트 없음, 기본 프롬프트 사용', 'warning')
-        return self.DEFAULT_PROMPT
+        # DB에 프롬프트가 없으면 최소한의 프롬프트 사용 (DEFAULT_PROMPT의 고정 구조 사용 안함)
+        self.log('DB에 프롬프트 없음! 최소 프롬프트 사용', 'warning')
+        return '''당신은 유튜브 대본 작가입니다.
+
+## 🚨 필수 규칙
+1. **대본 계획**이 있으면 그 구조와 비트 시퀀스를 **그대로** 따르세요
+2. **리서치 결과**의 수치/사례를 대본에 자연스럽게 녹여주세요
+3. **최소 8,000자 이상** 작성
+4. 순수 대본만 출력 (메타 설명, 섹션 마커, 타임스탬프 금지)
+
+JSON 형식으로 title과 content를 출력하세요.'''
 
     def _build_user_prompt(self, research: dict) -> str:
         """사용자 프롬프트 생성"""
@@ -704,6 +733,108 @@ JSON 형식으로 출력하세요:
 
 JSON 형식으로 출력하세요."""
 
+    def _clean_content(self, content: str) -> str:
+        """대본에서 메타 텍스트 제거 + JSON이면 content 추출"""
+        if not content:
+            return content
+
+        # JSON 형식이면 content 필드만 추출
+        if '```json' in content or ('"content"' in content and '"title"' in content):
+            try:
+                # ```json ... ``` 블록 추출
+                json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+                if json_match:
+                    data = json.loads(json_match.group(1))
+                    content = data.get('content', content)
+                else:
+                    # 직접 JSON 파싱
+                    data = json.loads(content)
+                    content = data.get('content', content)
+            except (json.JSONDecodeError, Exception):
+                pass  # 파싱 실패하면 원본 사용
+
+        lines = content.split('\n')
+        cleaned_lines = []
+
+        # 메타 설명 패턴 (첫 몇 줄에서만 제거)
+        meta_patterns = [
+            r'^제시해주신',
+            r'^요청하신',
+            r'^다음은.*대본',
+            r'^아래는.*대본',
+            r'^작성했습니다',
+            r'^.*보강.*대본',
+            r'^.*기존.*뼈대',
+        ]
+
+        # 섹션 마커 패턴
+        section_patterns = [
+            r'^\*\*\(.*?\)\*\*$',  # **(도입부)**
+            r'^\*\*\[.*?\]\*\*$',  # **[본론]**
+            r'^\[.*?\]$',          # [도입부]
+            r'^###\s*\[.*?\]',     # ### [대본]
+            r'^##\s*\[.*?\]',      # ## [대본]
+            r'^\(\d{1,2}:\d{2}\)',  # (01:45) 타임스탬프만 있는 줄
+        ]
+
+        skip_first_meta = True
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # 빈 줄은 유지
+            if not stripped:
+                cleaned_lines.append(line)
+                continue
+
+            # 구분선 제거
+            if stripped in ['---', '===', '***', '---\n']:
+                continue
+
+            # 첫 몇 줄에서 메타 설명 제거
+            if skip_first_meta and i < 10:
+                is_meta = False
+                for pattern in meta_patterns:
+                    if re.match(pattern, stripped):
+                        is_meta = True
+                        break
+                if is_meta:
+                    continue
+                # 실제 대본 시작하면 메타 스킵 종료
+                if len(stripped) > 30:
+                    skip_first_meta = False
+
+            # 섹션 마커 제거
+            is_section_marker = False
+            for pattern in section_patterns:
+                if re.match(pattern, stripped):
+                    is_section_marker = True
+                    break
+            if is_section_marker:
+                continue
+
+            # 타임스탬프 제거 (줄 시작 부분만)
+            line = re.sub(r'^\s*\(\d{1,2}:\d{2}\)\s*', '', line)
+
+            # 인라인 섹션 마커 제거
+            line = re.sub(r'\s*\[본론[^\]]*\]\s*', ' ', line)
+            line = re.sub(r'\s*\[도입부[^\]]*\]\s*', ' ', line)
+            line = re.sub(r'\s*\[마무리[^\]]*\]\s*', ' ', line)
+            line = re.sub(r'\s*\[비트\d+[^\]]*\]\s*', ' ', line)
+
+            # 마크다운 헤더 제거
+            line = re.sub(r'^#+\s*', '', line)
+
+            # 정리
+            line = line.strip()
+            if line:
+                cleaned_lines.append(line)
+
+        # 결과 조합 (연속 빈줄 정리)
+        result = '\n'.join(cleaned_lines)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+
+        return result.strip()
+
     def _parse_response(self, response: str, research: dict) -> dict:
         """응답 파싱"""
         # JSON 추출 시도
@@ -712,18 +843,20 @@ JSON 형식으로 출력하세요."""
             json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group(1))
+                content = self._clean_content(data.get('content', ''))
                 return {
                     'title': data.get('title', research.get('topic', '제목 없음')),
-                    'content': data.get('content', ''),
+                    'content': content,
                 }
 
             # JSON 객체 직접 찾기
             json_match = re.search(r'\{[^{}]*"content"[^{}]*\}', response, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group())
+                content = self._clean_content(data.get('content', ''))
                 return {
                     'title': data.get('title', research.get('topic', '제목 없음')),
-                    'content': data.get('content', ''),
+                    'content': content,
                 }
         except json.JSONDecodeError:
             pass
@@ -740,14 +873,18 @@ JSON 형식으로 출력하세요."""
                 title = potential_title
                 response = '\n'.join(lines[1:]).strip()
 
+        content = self._clean_content(response)
         return {
             'title': title,
-            'content': response,
+            'content': content,
         }
 
     def _expand_content(self, content: str, needed_chars: int, attempt: int = 1, research_summary: str = '') -> str:
         """글자수 보강"""
         original_len = len(content)
+
+        # 사용자 커스텀 프롬프트 가져오기
+        system_prompt = self._build_system_prompt()
 
         # 시도 횟수에 따라 다른 전략 사용
         if attempt == 1:
@@ -767,6 +904,7 @@ JSON 형식으로 출력하세요."""
 - 대안과 해결책 확장"""
 
         self.log(f'보강 전략 {attempt}: {strategy}')
+        self.log(f'보강에 사용할 시스템 프롬프트: {len(system_prompt)}자')
         self.log(f'보강 프롬프트 생성 중... (기존 대본 {original_len}자)')
 
         # 리서치 컨텍스트 포함 (전체)
@@ -799,14 +937,24 @@ JSON 형식으로 출력하세요."""
 - 리서치 내용과 관련된 추가 설명/사례 포함
 - 최종 글자수가 8000자 이상이어야 합니다
 
+**🚨 금지 (절대 포함 금지!):**
+- "네, 알겠습니다", "요청하신 대로", "보강하겠습니다" 등 메타 설명
+- "---", "===" 구분선
+- "[도입부]", "**(본론)**", "### 제목" 등 섹션 마커
+- "(00:00)" 타임스탬프
+- 순수 나레이션만 출력!
+
 기존 대본 ({original_len}자):
 ---
 {content}
 ---
 
-위 대본을 보강하여 8000자 이상의 전체 대본을 출력하세요:"""
+위 대본을 보강하여 8000자 이상의 전체 대본을 출력하세요 (순수 나레이션만!):"""
 
-        result = self.call_gemini(expand_prompt)
+        # 커스텀 프롬프트 + 보강 프롬프트
+        full_prompt = f"{system_prompt}\n\n---\n\n{expand_prompt}"
+        result = self.call_gemini(full_prompt)
+        result = self._clean_content(result)  # 메타 텍스트 제거
         new_len = len(result)
 
         self.log(f'Gemini 결과: {new_len}자 (원본: {original_len}자)')
@@ -835,8 +983,9 @@ JSON 형식으로 출력하세요."""
 - "~잖아요/~거든요" 어미 사용
 - 500자 이상
 
-추가 문단만 출력:"""
+추가 문단만 출력 (메타 설명 없이 순수 나레이션만!):"""
             extra = self.call_gemini(extra_prompt)
+            extra = self._clean_content(extra)
             self.log(f'추가 문단: {len(extra)}자 생성됨')
             if len(extra) > 200:
                 # 결론 앞에 삽입 (rfind는 못찾으면 -1 반환, -1은 truthy라서 or 체이닝 안됨)
