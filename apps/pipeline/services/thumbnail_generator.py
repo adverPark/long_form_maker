@@ -40,6 +40,7 @@ class ThumbnailGeneratorService(BaseStepService):
         """썸네일 이미지 생성 (1280x720)"""
         from google import genai
         from google.genai import types
+        from apps.pipeline.models import UploadInfo
         from PIL import Image, ImageDraw, ImageFont
         import io
 
@@ -54,49 +55,69 @@ class ThumbnailGeneratorService(BaseStepService):
         # 신 SDK 클라이언트 생성
         client = genai.Client(api_key=gemini_key)
 
-        prompt = f"""Create a YouTube thumbnail for a video.
+        # UploadInfo의 LLM 생성 썸네일 프롬프트 사용
+        custom_prompt = None
+        try:
+            upload_info = UploadInfo.objects.filter(project=self.project).first()
+            if upload_info and upload_info.thumbnail_prompt:
+                custom_prompt = upload_info.thumbnail_prompt.strip()
+                self.log(f'UploadInfo 썸네일 프롬프트 사용 ({len(custom_prompt)}자)')
+        except Exception:
+            pass
+
+        if custom_prompt:
+            prompt = f"""{custom_prompt}
+
+Additional requirements:
+- Size: 1280x720 (16:9 aspect ratio)
+- High contrast, eye-catching YouTube thumbnail design"""
+        else:
+            prompt = f"""Create a YouTube thumbnail for a video.
 Title: {title}
 
 Requirements:
 - Size: 1280x720 (16:9 aspect ratio)
-- Style: Professional news/documentary look
-- Include a presenter character on the left side
-- Dramatic lighting
+- Style: Professional, eye-catching design
 - Background should relate to the video topic
-- Space for text overlay on the right side
-- Yellow accent colors for emphasis
-- High contrast, eye-catching design"""
+- High contrast, dramatic lighting"""
+            self.log('UploadInfo 썸네일 프롬프트 없음 - 기본 프롬프트 사용')
 
         try:
             self.log(f'Gemini 이미지 생성 중... (키: {gemini_key[:10]}...)')
 
-            # 캐릭터 시트가 있으면 참조 이미지로 사용
-            if character_sheet.exists():
-                self.log('캐릭터 시트 참조 사용')
-                ref_image = Image.open(character_sheet)
-                # 이미지를 bytes로 변환
-                img_byte_arr = io.BytesIO()
-                ref_image.save(img_byte_arr, format='PNG')
-                img_bytes = img_byte_arr.getvalue()
+            contents = [prompt]
 
-                response = client.models.generate_content(
-                    model='gemini-3-pro-image-preview',
-                    contents=[
-                        types.Part.from_bytes(data=img_bytes, mime_type='image/png'),
-                        prompt
-                    ],
-                    config=types.GenerateContentConfig(
-                        response_modalities=['IMAGE', 'TEXT']
-                    )
+            # 썸네일 스타일 예시 이미지 추가
+            thumbnail_style = self.project.thumbnail_style
+            if thumbnail_style and thumbnail_style.example_image:
+                try:
+                    style_img = Image.open(thumbnail_style.example_image.path)
+                    img_buf = io.BytesIO()
+                    style_img.save(img_buf, format='PNG')
+                    contents.insert(0, types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
+                    contents[1] = f"Create a thumbnail in the same style as the reference image.\n\n{contents[1]}"
+                    self.log(f'썸네일 스타일 예시 이미지 사용: {thumbnail_style.name}')
+                except Exception as e:
+                    self.log(f'썸네일 스타일 이미지 로드 실패: {e}', 'warning')
+
+            # 캐릭터 시트 추가
+            if character_sheet.exists():
+                try:
+                    char_img = Image.open(character_sheet)
+                    img_buf = io.BytesIO()
+                    char_img.save(img_buf, format='PNG')
+                    contents.append(types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
+                    self.log('캐릭터 시트 참조 사용')
+                except Exception as e:
+                    self.log(f'캐릭터 시트 로드 실패: {e}', 'warning')
+
+            response = client.models.generate_content(
+                model='gemini-3-pro-image-preview',
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=['IMAGE', 'TEXT']
                 )
-            else:
-                response = client.models.generate_content(
-                    model='gemini-3-pro-image-preview',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_modalities=['IMAGE', 'TEXT']
-                    )
-                )
+            )
 
             # 이미지 추출 (신 SDK)
             if response.candidates:

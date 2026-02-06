@@ -493,7 +493,7 @@ class ThumbnailStylePreset(models.Model):
     # 썸네일 프롬프트 템플릿
     prompt_template = models.TextField(verbose_name="프롬프트 템플릿",
         help_text="사용 가능한 변수: {title}, {hook}, {main_keyword}",
-        default="""YouTube thumbnail for Korean economy video.
+        default="""YouTube thumbnail for a video.
 
 Main visual: {main_keyword} related scene
 Korean text: '{title}' (large, bold, contrasting color)
@@ -503,8 +503,7 @@ Emotion: curiosity, urgency
 Technical requirements:
 - 16:9 aspect ratio (1280x720)
 - High contrast for mobile visibility
-- Clean composition with focal point
-- Professional financial theme""")
+- Clean composition with focal point""")
 
     is_default = models.BooleanField(default=False, verbose_name="기본값")
     created_at = models.DateTimeField(auto_now_add=True)
