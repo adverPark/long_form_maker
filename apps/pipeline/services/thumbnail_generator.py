@@ -126,7 +126,7 @@ Requirements:
                     img_buf = io.BytesIO()
                     char_img.save(img_buf, format='PNG')
                     contents.append(types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
-                    ref_notes.append("Include the character from the character reference image.")
+                    ref_notes.append("Place the character from the reference image on the right side, as if presenting or introducing the topic to the viewer.")
                     self.log('캐릭터 시트 참조 사용')
                 except Exception as e:
                     self.log(f'캐릭터 시트 로드 실패: {e}', 'warning')

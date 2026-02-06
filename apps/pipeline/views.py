@@ -1995,7 +1995,8 @@ Korean text must be clearly readable with bold font and high contrast."""
             try:
                 char_img = Image.open(project.character.image.path)
                 contents.append(char_img)
-                ref_notes.append(f"Include the character from reference. {project.character.character_prompt}")
+                char_desc = f" {project.character.character_prompt}" if project.character.character_prompt else ""
+                ref_notes.append(f"Place the character from the reference image on the right side, as if presenting or introducing the topic to the viewer.{char_desc}")
             except:
                 pass
 
