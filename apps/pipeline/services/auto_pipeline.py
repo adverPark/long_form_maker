@@ -57,6 +57,7 @@ class AutoPipelineService(BaseStepService):
         {'name': 'scene_planner', 'default_model': None, 'display': '씬 분할'},  # 규칙 기반, 모델 불필요
         {'name': 'tts_converter', 'default_model': '2.5-flash', 'display': 'TTS 변환'},  # narration → narration_tts
         {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성'},
+        {'name': 'freepik_video', 'default_model': None, 'display': '스톡 영상'},
         {'name': 'image_prompter', 'default_model': '2.5-flash', 'display': '이미지 프롬프트'},
         {'name': 'scene_generator', 'default_model': None, 'display': '이미지 생성'},
         {'name': 'video_generator', 'default_model': None, 'display': '영상 생성'},

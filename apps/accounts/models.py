@@ -46,6 +46,9 @@ class APIKey(models.Model):
     SERVICE_CHOICES = [
         ('gemini', 'Google Gemini'),
         ('replicate', 'Replicate'),
+        ('freepik', 'Freepik'),
+        ('freepik_cookie', 'Freepik 쿠키'),
+        ('freepik_wallet', 'Freepik Wallet ID'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_keys')

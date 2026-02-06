@@ -42,6 +42,9 @@ def settings_view(request):
     # API 키를 서비스별로 그룹화
     gemini_keys = api_keys.filter(service='gemini')
     replicate_keys = api_keys.filter(service='replicate')
+    freepik_keys = api_keys.filter(service='freepik')
+    freepik_cookie_key = api_keys.filter(service='freepik_cookie').first()
+    freepik_wallet_key = api_keys.filter(service='freepik_wallet').first()
 
     # 프리셋들
     image_styles = ImageStylePreset.objects.filter(user=request.user)
@@ -52,6 +55,9 @@ def settings_view(request):
     context = {
         'gemini_keys': gemini_keys,
         'replicate_keys': replicate_keys,
+        'freepik_keys': freepik_keys,
+        'freepik_cookie_key': freepik_cookie_key,
+        'freepik_wallet_key': freepik_wallet_key,
         'services': APIKey.SERVICE_CHOICES,
         'gemini_model_choices': User.GEMINI_MODEL_CHOICES,
         'current_gemini_model': request.user.gemini_model,
@@ -76,6 +82,16 @@ def save_api_key(request):
     if not service or not api_key_value or not name:
         messages.error(request, '모든 필드를 입력해주세요.')
         return redirect('accounts:settings')
+
+    # freepik_cookie, freepik_wallet은 항상 1개만 유지 (덮어쓰기)
+    if service in ('freepik_cookie', 'freepik_wallet'):
+        existing = APIKey.objects.filter(user=request.user, service=service).first()
+        if existing:
+            existing.set_key(api_key_value)
+            existing.save()
+            label = 'Freepik 쿠키' if service == 'freepik_cookie' else 'Freepik Wallet ID'
+            messages.success(request, f'{label}가 업데이트되었습니다.')
+            return redirect('accounts:settings')
 
     # 첫 번째 키면 자동으로 기본 설정
     existing_count = APIKey.objects.filter(user=request.user, service=service).count()

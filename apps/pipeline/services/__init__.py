@@ -15,6 +15,7 @@ from .thumbnail_generator import ThumbnailGeneratorService
 from .tts_generator import TTSGeneratorService
 from .tts_converter import TTSConverterService
 from .upload_info_generator import UploadInfoGeneratorService
+from .freepik_video import FreepikVideoService
 from .auto_pipeline import AutoPipelineService
 
 # 에이전트 이름 -> 서비스 클래스 매핑
@@ -35,6 +36,7 @@ SERVICE_REGISTRY = {
     'video_composer': VideoComposerService,
     'thumbnail_generator': ThumbnailGeneratorService,
     'upload_info_generator': UploadInfoGeneratorService,
+    'freepik_video': FreepikVideoService,
 }
 
 

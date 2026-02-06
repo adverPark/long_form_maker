@@ -579,6 +579,13 @@ def project_settings(request, pk):
         voice_id = request.POST.get('voice')
         thumbnail_style_id = request.POST.get('thumbnail_style')
 
+        # 스톡 영상 간격
+        freepik_interval = request.POST.get('freepik_interval', '0')
+        try:
+            project.freepik_interval = int(freepik_interval)
+        except (ValueError, TypeError):
+            project.freepik_interval = 0
+
         project.image_style_id = image_style_id if image_style_id else None
         project.character_id = character_id if character_id else None
         project.voice_id = voice_id if voice_id else None
@@ -828,7 +835,13 @@ def scene_generate_tts(request, pk, scene_number):
         if response.status_code == 200:
             subtitle_status = 'none'
             subtitle_word_count = 0
-            narration_word_count = len(original_narration.split()) if original_narration else 0
+            # 자막용: 원본 narration을 전처리 (따옴표만 제거, narration_tts의 숫자 변환 등은 반영 안함)
+            clean_narration = original_narration
+            for char in quote_chars:
+                clean_narration = clean_narration.replace(char, "")
+            clean_narration = re.sub(r'…+', '...', clean_narration)
+            clean_narration = re.sub(r'\s+', ' ', clean_narration).strip()
+            narration_word_count = len(clean_narration.split())
 
             # ZIP 응답 처리
             if response.content[:2] == b'PK':
@@ -853,9 +866,9 @@ def scene_generate_tts(request, pk, scene_number):
 
                             subtitle_word_count = len(srt_timings)
 
-                            # 원본 narration으로 매핑
+                            # 원본 narration 전처리 후 매핑 (따옴표만 제거, narration_tts 숫자변환 미반영)
                             if srt_timings and original_narration:
-                                narration_words = original_narration.split()
+                                narration_words = clean_narration.split()
                                 mapped_entries = []
                                 for i, timing in enumerate(srt_timings):
                                     word = narration_words[i] if i < len(narration_words) else timing["text"]
@@ -949,6 +962,239 @@ def scene_edit(request, pk, scene_number):
         'message': '저장되었습니다.',
         'narration_tts': scene.narration_tts,
     })
+
+
+@login_required
+@require_POST
+def scene_generate_stock_video(request, pk, scene_number):
+    """개별 씬 스톡 영상 검색/다운로드 (Freepik)"""
+    import re
+    import time
+    import requests as http_requests
+    from google import genai
+    from django.core.files.base import ContentFile
+    from apps.accounts.models import APIKey
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
+
+    # Freepik API 키
+    freepik_key_obj = APIKey.objects.filter(user=request.user, service='freepik', is_default=True).first()
+    if not freepik_key_obj:
+        freepik_key_obj = APIKey.objects.filter(user=request.user, service='freepik').first()
+    if not freepik_key_obj:
+        return JsonResponse({'success': False, 'message': 'Freepik API 키가 설정되지 않았습니다.'})
+    freepik_key = freepik_key_obj.get_key()
+
+    # Gemini 키 (키워드 추출 + 영상 선택)
+    gemini_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
+    if not gemini_key_obj:
+        gemini_key_obj = APIKey.objects.filter(user=request.user, service='gemini').first()
+    if not gemini_key_obj:
+        return JsonResponse({'success': False, 'message': 'Gemini API 키가 설정되지 않았습니다.'})
+    gemini_key = gemini_key_obj.get_key()
+    client = genai.Client(api_key=gemini_key)
+
+    try:
+        narration = scene.narration or ''
+        image_prompt = scene.image_prompt or ''
+
+        # 1. LLM 키워드 추출
+        kw_prompt = f"""You are a stock video search expert.
+Extract exactly 2 English search keywords for finding a stock video that visually matches this scene.
+
+Scene narration (Korean): {narration}
+Visual description: {image_prompt}
+
+Rules:
+- Each keyword should be 2-4 words
+- Focus on the main visual subject (people, objects, places, actions)
+- Make keywords suitable for stock video search (generic, not too specific)
+- Do NOT include style/mood words (dramatic, cinematic, etc.)
+
+Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
+
+        kw_response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=kw_prompt,
+        )
+        lines = [line.strip() for line in kw_response.text.strip().split('\n') if line.strip()]
+        keywords = [re.sub(r'^[\d\.\)\-\*]+\s*', '', l).strip() for l in lines][:2]
+
+        if not keywords:
+            return JsonResponse({'success': False, 'message': '키워드 추출 실패'})
+
+        # 이미 사용된 영상 ID
+        used_ids = set(
+            project.scenes.exclude(stock_video_id='').values_list('stock_video_id', flat=True)
+        )
+
+        # 2. 검색 (무료만)
+        headers = {'x-freepik-api-key': freepik_key, 'Accept': 'application/json'}
+        candidates = []
+        seen_ids = set()
+        for kw in keywords:
+            resp = http_requests.get(
+                'https://api.freepik.com/v1/videos',
+                headers=headers,
+                params={'term': kw},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                for v in resp.json().get('data', []):
+                    vid = str(v.get('id', ''))
+                    if not vid or vid in used_ids or vid in seen_ids:
+                        continue
+                    seen_ids.add(vid)
+                    candidates.append({
+                        'id': vid,
+                        'name': v.get('name', ''),
+                        'duration': v.get('duration', ''),
+                    })
+
+        if not candidates:
+            return JsonResponse({'success': False, 'message': f'검색 결과 없음 (키워드: {", ".join(keywords)})'})
+
+        # 후보 수 제한
+        candidates = candidates[:15]
+
+        # 3. LLM 영상 선택
+        selected = candidates[0]
+        if len(candidates) > 1:
+            cand_text = ''
+            for i, c in enumerate(candidates):
+                cand_text += f'{i + 1}. {c["name"]}'
+                if c.get('duration'):
+                    cand_text += f' ({c["duration"]})'
+                cand_text += '\n'
+
+            sel_prompt = f"""Choose the best stock video for this scene.
+
+Scene narration (Korean): {narration}
+Visual description: {image_prompt}
+
+Available videos:
+{cand_text}
+IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else."""
+
+            sel_response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=sel_prompt,
+            )
+            numbers = re.findall(r'\d+', sel_response.text.strip())
+            if numbers:
+                idx = int(numbers[0]) - 1
+                if 0 <= idx < len(candidates):
+                    selected = candidates[idx]
+
+        # 4. 다운로드 (웹사이트 쿠키 우선, 실패 시 API 폴백)
+        import subprocess, tempfile, os
+        file_data = None
+        download_method = 'api'
+
+        # 웹사이트 쿠키 다운로드 시도
+        cookie_obj = APIKey.objects.filter(user=request.user, service='freepik_cookie').first()
+        wallet_obj = APIKey.objects.filter(user=request.user, service='freepik_wallet').first()
+        if cookie_obj and wallet_obj:
+            cookie_str = cookie_obj.get_key()
+            wallet_id = wallet_obj.get_key()
+            web_headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Cookie': cookie_str,
+                'Referer': 'https://kr.freepik.com/',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-origin',
+            }
+            try:
+                web_resp = http_requests.get(
+                    f'https://kr.freepik.com/api/video/{selected["id"]}/download?walletId={wallet_id}',
+                    headers=web_headers, timeout=15
+                )
+                if web_resp.status_code == 200:
+                    dl_info = web_resp.json()
+                    dl_url = dl_info.get('url')
+                    filename_hint = dl_info.get('filename', '')
+                    if dl_url:
+                        file_resp = http_requests.get(dl_url, timeout=180)
+                        file_resp.raise_for_status()
+                        file_data = file_resp.content
+                        download_method = 'website'
+                        # .mov면 변환, .mp4면 그대로
+                        if filename_hint.lower().endswith('.mov') or len(file_data) > 50 * 1024 * 1024:
+                            with tempfile.NamedTemporaryFile(suffix='.mov', delete=False) as tmp_in:
+                                tmp_in.write(file_data)
+                                tmp_in_path = tmp_in.name
+                            tmp_out_path = tmp_in_path.replace('.mov', '_converted.mp4')
+                            try:
+                                cmd = ['ffmpeg', '-y', '-i', tmp_in_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                                       '-vf', 'scale=-2:1080', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', tmp_out_path]
+                                result = subprocess.run(cmd, capture_output=True, timeout=120)
+                                if result.returncode == 0:
+                                    with open(tmp_out_path, 'rb') as f:
+                                        file_data = f.read()
+                            finally:
+                                for p in [tmp_in_path, tmp_out_path]:
+                                    if os.path.exists(p):
+                                        os.unlink(p)
+            except Exception:
+                file_data = None  # 웹사이트 실패, API 폴백
+
+        # API 다운로드 폴백
+        if not file_data:
+            dl_resp = http_requests.get(
+                f'https://api.freepik.com/v1/videos/{selected["id"]}/download',
+                headers=headers, timeout=15
+            )
+            if dl_resp.status_code == 403:
+                return JsonResponse({'success': False, 'message': '다운로드 권한 없음'})
+            dl_resp.raise_for_status()
+            download_url = dl_resp.json().get('data', {}).get('url')
+            if not download_url:
+                return JsonResponse({'success': False, 'message': '다운로드 URL 없음'})
+            file_resp = http_requests.get(download_url, timeout=180)
+            file_resp.raise_for_status()
+            file_data = file_resp.content
+            download_method = 'api'
+            # API 다운로드는 항상 변환 필요
+            with tempfile.NamedTemporaryFile(suffix='.mov', delete=False) as tmp_in:
+                tmp_in.write(file_data)
+                tmp_in_path = tmp_in.name
+            tmp_out_path = tmp_in_path.replace('.mov', '_converted.mp4')
+            try:
+                cmd = ['ffmpeg', '-y', '-i', tmp_in_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                       '-vf', 'scale=-2:1080', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', tmp_out_path]
+                result = subprocess.run(cmd, capture_output=True, timeout=120)
+                if result.returncode == 0:
+                    with open(tmp_out_path, 'rb') as f:
+                        file_data = f.read()
+            finally:
+                for p in [tmp_in_path, tmp_out_path]:
+                    if os.path.exists(p):
+                        os.unlink(p)
+
+        # 5. 저장
+        video_id = str(selected['id'])
+        filename = f'stock_{project.pk}_{scene.scene_number:02d}.mp4'
+        scene.stock_video.save(filename, ContentFile(file_data), save=False)
+        Scene.objects.filter(pk=scene.pk).update(
+            stock_video=scene.stock_video.name,
+            stock_video_id=video_id
+        )
+
+        cost_label = '무료' if download_method == 'website' else '유료'
+        return JsonResponse({
+            'success': True,
+            'message': f'스톡 영상 저장 완료 (ID: {video_id}, {cost_label})',
+            'video_url': scene.stock_video.url,
+            'video_id': video_id,
+            'keywords': keywords,
+            'name': selected.get('name', ''),
+        })
+
+    except Exception as e:
+        return JsonResponse({'success': False, 'message': f'오류: {str(e)[:200]}'})
 
 
 @login_required
@@ -1405,16 +1651,16 @@ def generate_upload_info(request, pk):
     if not scenes:
         return JsonResponse({'success': False, 'message': '씬이 없습니다. 씬 분할을 먼저 진행하세요.'})
 
-    # 이미지 프롬프트 검증
-    missing_prompts = [s.scene_number for s in scenes if not s.image_prompt or s.image_prompt == '[PLACEHOLDER]']
+    # 이미지 프롬프트 검증 (스톡 영상 있는 씬은 제외)
+    missing_prompts = [s.scene_number for s in scenes if not s.stock_video and (not s.image_prompt or s.image_prompt == '[PLACEHOLDER]')]
     if missing_prompts:
         return JsonResponse({
             'success': False,
             'message': f'이미지 프롬프트 없는 씬: {missing_prompts[:10]}{"..." if len(missing_prompts) > 10 else ""} (총 {len(missing_prompts)}개)'
         })
 
-    # 이미지 검증
-    missing_images = [s.scene_number for s in scenes if not s.image]
+    # 이미지 검증 (스톡 영상 있는 씬은 제외)
+    missing_images = [s.scene_number for s in scenes if not s.stock_video and not s.image]
     if missing_images:
         return JsonResponse({
             'success': False,

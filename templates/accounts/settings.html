@@ -148,6 +148,116 @@
                 {% else %}
                 <p class="text-muted">등록된 Replicate 키가 없습니다.</p>
                 {% endif %}
+
+                <!-- Freepik 키 선택 -->
+                <h6 class="mt-4"><i class="bi bi-camera-video"></i> Freepik 키 선택</h6>
+                <form method="post" action="{% url 'accounts:save_api_key' %}" class="mb-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="service" value="freepik">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-3">
+                            <input type="text" name="name" class="form-control" placeholder="이름 (예: 개인용)" required>
+                        </div>
+                        <div class="col-md-5">
+                            <input type="password" name="api_key" class="form-control" placeholder="API 키 입력" required>
+                        </div>
+                        <div class="col-md-2">
+                            <div class="form-check">
+                                <input type="checkbox" name="is_default" class="form-check-input" id="freepik_default">
+                                <label class="form-check-label" for="freepik_default">기본</label>
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="bi bi-plus-lg"></i> 추가
+                            </button>
+                        </div>
+                    </div>
+                </form>
+                {% if freepik_keys %}
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>이름</th>
+                            <th>키</th>
+                            <th>상태</th>
+                            <th>작업</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for key in freepik_keys %}
+                        <tr>
+                            <td>{{ key.name }}</td>
+                            <td><code>{{ key.get_masked_key }}</code></td>
+                            <td>
+                                {% if key.is_default %}
+                                <span class="badge bg-primary">기본</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if not key.is_default %}
+                                <form method="post" action="{% url 'accounts:set_default_api_key' key.pk %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">기본 설정</button>
+                                </form>
+                                {% endif %}
+                                <form method="post" action="{% url 'accounts:delete_api_key' key.pk %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="return confirm('정말 삭제하시겠습니까?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-muted">등록된 Freepik 키가 없습니다.</p>
+                {% endif %}
+
+                <!-- Freepik 웹사이트 쿠키 (무료 다운로드용) -->
+                <h6 class="mt-4"><i class="bi bi-globe"></i> Freepik 웹사이트 다운로드 (프리미엄 구독 무료)</h6>
+                <p class="text-muted small mb-2">프리미엄 구독이 있으면 쿠키+walletId로 무료 다운로드 가능합니다. 쿠키가 없으면 API 유료 다운로드를 사용합니다.</p>
+
+                <!-- Wallet ID -->
+                <form method="post" action="{% url 'accounts:save_api_key' %}" class="mb-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="service" value="freepik_wallet">
+                    <input type="hidden" name="name" value="기본">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-8">
+                            <label class="form-label small">Wallet ID <small class="text-muted">(다운로드 시 Network탭에서 walletId 확인)</small></label>
+                            <input type="text" name="api_key" class="form-control form-control-sm"
+                                   placeholder="eed025d7-83b9-499d-bfac-c9cee0335b7f"
+                                   value="{% if freepik_wallet_key %}{{ freepik_wallet_key.get_key }}{% endif %}">
+                        </div>
+                        <div class="col-md-4">
+                            <button type="submit" class="btn btn-sm btn-outline-warning w-100">
+                                <i class="bi bi-save"></i> 저장
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <!-- Cookie -->
+                <form method="post" action="{% url 'accounts:save_api_key' %}" class="mb-2">
+                    {% csrf_token %}
+                    <input type="hidden" name="service" value="freepik_cookie">
+                    <input type="hidden" name="name" value="기본">
+                    <div class="mb-2">
+                        <label class="form-label small">브라우저 쿠키 <small class="text-muted">(F12 > Network > 요청 헤더의 Cookie 값 전체 복사)</small></label>
+                        <textarea name="api_key" class="form-control form-control-sm" rows="3"
+                                  placeholder="GRID=...; UID=...; GR_TOKEN=...; ak_bmsc=...; ...">{% if freepik_cookie_key %}{{ freepik_cookie_key.get_key }}{% endif %}</textarea>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                        <i class="bi bi-save"></i> 쿠키 저장
+                    </button>
+                    {% if freepik_cookie_key %}
+                    <span class="text-success small ms-2">저장됨 ({{ freepik_cookie_key.get_key|truncatechars:40 }})</span>
+                    {% endif %}
+                </form>
             </div>
         </div>
     </div>

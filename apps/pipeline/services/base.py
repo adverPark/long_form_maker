@@ -161,6 +161,32 @@ class BaseStepService(ABC):
         except APIKey.DoesNotExist:
             raise ValueError('Replicate API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.')
 
+    def get_freepik_key(self) -> str:
+        """사용자의 기본 Freepik API 키 가져오기"""
+        try:
+            api_key = self.user.api_keys.filter(service='freepik', is_default=True).first()
+            if not api_key:
+                api_key = self.user.api_keys.filter(service='freepik').first()
+            if not api_key:
+                raise ValueError('Freepik API 키가 설정되지 않았습니다.')
+            return api_key.get_key()
+        except APIKey.DoesNotExist:
+            raise ValueError('Freepik API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.')
+
+    def get_freepik_cookie(self) -> str:
+        """사용자의 Freepik 웹사이트 쿠키 가져오기"""
+        api_key = self.user.api_keys.filter(service='freepik_cookie').first()
+        if not api_key:
+            return ''
+        return api_key.get_key()
+
+    def get_freepik_wallet(self) -> str:
+        """사용자의 Freepik Wallet ID 가져오기"""
+        api_key = self.user.api_keys.filter(service='freepik_wallet').first()
+        if not api_key:
+            return ''
+        return api_key.get_key()
+
     def get_prompt(self) -> str:
         """프롬프트 가져오기 (사용자별 > 시스템 기본)"""
         if not self.agent_name:

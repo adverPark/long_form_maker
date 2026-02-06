@@ -25,6 +25,16 @@
 - 다른 프로젝트의 설정 파일 수정 금지
 - **서비스 재시작(`sudo systemctl restart longform` 등)은 절대 직접 실행하지 말 것 - 사용자가 직접 수행함**
 
+## 데이터베이스 주의사항 (중요!)
+- **프로덕션 서버는 PostgreSQL 사용** (settings: `config.settings.production`)
+- **`manage.py shell` 기본값은 SQLite** (settings: `config.settings.local`) → 프로덕션 데이터 안 보임!
+- **프로덕션 DB 접근 시 반드시:**
+  ```bash
+  DJANGO_SETTINGS_MODULE=config.settings.production .venv/bin/python manage.py shell
+  ```
+- `.env` 파일에 `DJANGO_SETTINGS_MODULE=config.settings.production` 설정되어 있으나 manage.py에서 자동 적용 안 됨
+- gunicorn 서비스는 `.env`를 EnvironmentFile로 로드하므로 프로덕션 설정 사용
+
 ## 설치 위치
 - 경로: `/home/adver/long_form_site/`
 - 가상환경: uv 사용 (프로젝트 내 `.venv`)

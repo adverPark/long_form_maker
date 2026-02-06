@@ -28,6 +28,7 @@ urlpatterns = [
     path('project/<int:pk>/scene/<int:scene_number>/edit/', views.scene_edit, name='scene_edit'),
     path('project/<int:pk>/scene/<int:scene_number>/delete/', views.scene_delete, name='scene_delete'),
     path('project/<int:pk>/scene/<int:scene_number>/convert-tts/', views.scene_convert_tts, name='scene_convert_tts'),
+    path('project/<int:pk>/scene/<int:scene_number>/generate-stock-video/', views.scene_generate_stock_video, name='scene_generate_stock_video'),
     path('project/<int:pk>/convert-all-tts/', views.convert_all_tts, name='convert_all_tts'),
 
     # 병렬 실행

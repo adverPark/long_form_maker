@@ -51,12 +51,24 @@ class ImagePrompterService(BaseStepService):
             else:
                 self.log(f'⚠️ {empty_count}개 씬의 나레이션이 비어있어 해당 씬은 건너뜁니다', 'warning')
 
+        # 스톡 영상 대상 씬 번호 계산
+        interval = self.project.freepik_interval or 0
+        stock_scene_numbers = set()
+        if interval > 0:
+            for s in all_scenes:
+                if s.scene_number >= 2 and (s.scene_number - 2) % interval == 0:
+                    stock_scene_numbers.add(s.scene_number)
+            if stock_scene_numbers:
+                self.log(f'스톡 영상 대상 씬 {len(stock_scene_numbers)}개 건너뜀: {sorted(stock_scene_numbers)}')
+
         # 프롬프트가 필요한 씬만 필터링 (비어있거나 PLACEHOLDER이거나 너무 짧은 것)
-        # 나레이션 없는 씬은 제외
+        # 나레이션 없는 씬, 스톡 영상 대상 씬은 제외
         scenes_to_process = []
         for scene in all_scenes:
             if not scene.narration:
-                continue  # 나레이션 없으면 건너뜀
+                continue
+            if scene.scene_number in stock_scene_numbers:
+                continue
             prompt = scene.image_prompt or ''
             if not prompt or prompt == '[PLACEHOLDER]' or len(prompt.split()) < 15:
                 scenes_to_process.append(scene)

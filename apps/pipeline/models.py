@@ -20,6 +20,7 @@ class PipelineStep(models.Model):
         ('video_composer', '영상 편집'),
         ('thumbnail_generator', '썸네일 생성'),
         ('upload_info_generator', '업로드 정보 생성'),
+        ('freepik_video', '스톡 영상'),
     ]
 
     name = models.CharField(max_length=50, choices=STEP_CHOICES, unique=True, verbose_name="단계명")
@@ -73,6 +74,12 @@ class Project(models.Model):
     thumbnail_style = models.ForeignKey('ThumbnailStylePreset', on_delete=models.SET_NULL,
         null=True, blank=True, verbose_name="썸네일 스타일")
 
+    # 스톡 영상 간격 (0=사용 안함)
+    freepik_interval = models.IntegerField(
+        default=0, verbose_name="스톡 영상 간격",
+        help_text="N번째 씬마다 스톡 영상 삽입 (0=사용 안함)"
+    )
+
     # 최종 결과물 (파일)
     final_video = models.FileField(upload_to='projects/videos/', blank=True, null=True, verbose_name="최종 영상")
     thumbnail = models.ImageField(upload_to='projects/thumbnails/', blank=True, null=True, verbose_name="썸네일")
@@ -98,6 +105,8 @@ class Project(models.Model):
                 scene.image.delete(save=False)
             if scene.video:
                 scene.video.delete(save=False)
+            if scene.stock_video:
+                scene.stock_video.delete(save=False)
             if scene.audio:
                 scene.audio.delete(save=False)
             if scene.subtitle_file:
@@ -324,6 +333,8 @@ class Scene(models.Model):
     # 생성된 파일들
     image = models.ImageField(upload_to='projects/scenes/images/', blank=True, null=True, verbose_name="이미지")
     video = models.FileField(upload_to='projects/scenes/videos/', blank=True, null=True, verbose_name="영상")
+    stock_video = models.FileField(upload_to='projects/scenes/stock_videos/', blank=True, null=True, verbose_name="스톡 영상")
+    stock_video_id = models.CharField(max_length=50, blank=True, default='', verbose_name="스톡 영상 ID")
     audio = models.FileField(upload_to='projects/scenes/audio/', blank=True, null=True, verbose_name="음성")
     subtitle_file = models.FileField(upload_to='projects/scenes/subtitles/', blank=True, null=True, verbose_name="자막")
 

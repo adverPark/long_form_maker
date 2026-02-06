@@ -104,8 +104,9 @@ class TTSGeneratorService(BaseStepService):
         Returns:
             tuple: (mapped_srt_content, is_valid, srt_word_count, narration_word_count)
         """
-        # 원본 narration을 단어로 분리
-        narration_words = narration.split()
+        # 따옴표 제거 후 단어 분리 (TTS 전처리와 동일하게)
+        clean_narration = self._preprocess_for_tts(narration)
+        narration_words = clean_narration.split()
         srt_word_count = len(srt_timings)
         narration_word_count = len(narration_words)
 

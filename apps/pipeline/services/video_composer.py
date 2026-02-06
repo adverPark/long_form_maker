@@ -293,8 +293,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 skipped += 1
                 continue
 
-            # 입력 파일 결정 (동영상 or 이미지)
-            if scene.video:
+            # 입력 파일 결정 (스톡영상 > 동영상 > 이미지)
+            if scene.stock_video:
+                input_file = scene.stock_video.path
+                is_video = True
+            elif scene.video:
                 input_file = scene.video.path
                 is_video = True
             elif scene.image:

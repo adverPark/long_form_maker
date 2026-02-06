@@ -478,10 +478,10 @@
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'transcript_analyzer' %}" class="d-inline ms-2 ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-flash">2.5 Flash</option>
                     <option value="2.5-pro">2.5 Pro</option>
                     <option value="flash">3 Flash</option>
-                    <option value="pro">3 Pro</option>
+                    <option value="pro" selected>3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary" {% if not research.transcript %}disabled{% endif %}>
                     <i class="bi bi-file-text"></i> 분석
@@ -525,10 +525,10 @@
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'comment_analyzer' %}" class="d-inline ms-2 ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-flash">2.5 Flash</option>
                     <option value="2.5-pro">2.5 Pro</option>
                     <option value="flash">3 Flash</option>
-                    <option value="pro">3 Pro</option>
+                    <option value="pro" selected>3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-info" {% if not research.youtube_comments.count %}disabled{% endif %}>
                     <i class="bi bi-chat-dots"></i> 분석
@@ -572,10 +572,10 @@
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'script_planner' %}" class="d-inline ms-2 ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-flash">2.5 Flash</option>
                     <option value="2.5-pro">2.5 Pro</option>
                     <option value="flash">3 Flash</option>
-                    <option value="pro">3 Pro</option>
+                    <option value="pro" selected>3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-success" {% if not research.content_analysis.transcript_analysis or not research.content_analysis.comment_analysis %}disabled{% endif %}>
                     <i class="bi bi-diagram-3"></i> 계획
@@ -623,10 +623,10 @@
             <form method="post" action="{% url 'pipeline:step_execute' project.pk 'researcher' %}" class="d-inline ajax-step-form">
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                    <option value="2.5-flash" selected>2.5 Flash</option>
+                    <option value="2.5-flash">2.5 Flash</option>
                     <option value="2.5-pro">2.5 Pro</option>
                     <option value="flash">3 Flash</option>
-                    <option value="pro">3 Pro</option>
+                    <option value="pro" selected>3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-search"></i> {% if research.content_analysis.research_result %}재실행{% else %}실행{% endif %}
@@ -700,9 +700,9 @@
                 {% csrf_token %}
                 <select name="model_type" class="form-select form-select-sm d-inline-block" style="width: auto;">
                     <option value="2.5-flash">2.5 Flash</option>
-                    <option value="2.5-pro" selected>2.5 Pro</option>
+                    <option value="2.5-pro">2.5 Pro</option>
                     <option value="flash">3 Flash</option>
-                    <option value="pro">3 Pro</option>
+                    <option value="pro" selected>3 Pro</option>
                 </select>
                 <button type="submit" class="btn btn-sm btn-outline-primary">
                     <i class="bi bi-pencil"></i> {% if draft %}재생성{% else %}생성{% endif %}
@@ -836,6 +836,16 @@
                             <i class="bi bi-mic"></i> TTS 생성하기
                         </button>
                     </form>
+
+                    {% if project.freepik_interval %}
+                    <!-- 스톡 영상 -->
+                    <form method="post" action="{% url 'pipeline:step_execute' project.pk 'freepik_video' %}" class="d-inline ajax-step-form">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-outline-warning" {% if scenes.count == 0 %}disabled{% endif %}>
+                            <i class="bi bi-camera-video"></i> 스톡 영상 받기
+                        </button>
+                    </form>
+                    {% endif %}
                 </div>
             </div>
 
@@ -904,8 +914,16 @@
                              onkeydown="handleEditKey(event, this)"
                              {% if not scene.image_prompt %}data-placeholder="(클릭하여 프롬프트 입력)"{% endif %}>{{ scene.image_prompt|default:"" }}</div>
                     </div>
-                    <div class="scene-image">
-                        {% if scene.image %}
+                    <div class="scene-image" id="scene-image-{{ scene.scene_number }}">
+                        {% if scene.stock_video %}
+                        <div class="stock-video-badge" onclick="previewVideo('{{ scene.stock_video.url }}', {{ scene.scene_number }})" title="스톡 영상 재생" style="cursor:pointer; position:relative;">
+                            <img src="" alt="스톡" class="scene-thumbnail" style="background:#1a1a2e; display:flex; align-items:center; justify-content:center;">
+                            <div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; background:rgba(0,0,0,0.5); border-radius:4px;">
+                                <i class="bi bi-camera-video-fill" style="font-size:1.5em;"></i>
+                                <small style="font-size:0.6em;">스톡</small>
+                            </div>
+                        </div>
+                        {% elif scene.image %}
                         <img src="{{ scene.image.url }}" alt="씬 {{ scene.scene_number }}" class="scene-thumbnail" onclick="previewImage('{{ scene.image.url }}')">
                         {% if scene.video %}
                         <div class="video-overlay" onclick="event.stopPropagation(); previewVideo('{{ scene.video.url }}', {{ scene.scene_number }})" title="인트로 영상 재생">
@@ -967,6 +985,11 @@
                                 onclick="generateSceneTTS({{ scene.scene_number }})"
                                 title="{% if scene.audio %}TTS 재생성{% else %}TTS 생성{% endif %}">
                             <i class="bi bi-mic"></i>
+                        </button>
+                        <button class="btn btn-sm {% if scene.stock_video %}btn-outline-warning{% else %}btn-outline-info{% endif %}"
+                                onclick="generateStockVideo({{ scene.scene_number }})"
+                                title="{% if scene.stock_video %}스톡 영상 교체{% else %}스톡 영상 검색{% endif %}">
+                            <i class="bi bi-camera-video"></i>
                         </button>
                         <button class="btn btn-sm btn-outline-danger"
                                 onclick="deleteScene({{ scene.scene_number }})"
@@ -1687,6 +1710,47 @@ async function generateSceneTTS(sceneNumber) {
         }
     } catch (error) {
         alert('오류: ' + error.message);
+        btn.innerHTML = originalHtml;
+    }
+    btn.disabled = false;
+}
+
+// 스톡 영상 생성
+async function generateStockVideo(sceneNumber) {
+    if (!confirm(`씬 ${sceneNumber}의 스톡 영상을 검색하시겠습니까?`)) return;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+    btn.disabled = true;
+
+    try {
+        const response = await fetch(`{% url 'pipeline:scene_generate_stock_video' project.pk 0 %}`.replace('/0/', `/${sceneNumber}/`), {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' }
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            // 이미지 영역을 스톡 영상 표시로 교체
+            const imageDiv = document.getElementById(`scene-image-${sceneNumber}`);
+            imageDiv.innerHTML = `
+                <div onclick="previewVideo('${data.video_url}', ${sceneNumber})" title="스톡 영상 재생" style="cursor:pointer; position:relative;">
+                    <div class="scene-thumbnail" style="background:#1a1a2e; width:100%; aspect-ratio:16/9; border-radius:4px;"></div>
+                    <div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; background:rgba(0,0,0,0.5); border-radius:4px;">
+                        <i class="bi bi-camera-video-fill" style="font-size:1.5em;"></i>
+                        <small style="font-size:0.6em;">스톡</small>
+                    </div>
+                </div>`;
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+            btn.className = btn.className.replace('btn-outline-info', 'btn-outline-warning');
+            showToast(`씬 ${sceneNumber} 스톡 영상 저장 (${data.title})`, 'success');
+        } else {
+            showToast(data.message, 'danger');
+            btn.innerHTML = originalHtml;
+        }
+    } catch (error) {
+        showToast('오류: ' + error.message, 'danger');
         btn.innerHTML = originalHtml;
     }
     btn.disabled = false;
@@ -2426,30 +2490,30 @@ async function convertAllTtsAI() {
                     <div class="mb-3">
                         <label class="form-label fw-bold">자막 분석</label>
                         <select name="model_transcript_analyzer" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
                             <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="pro" selected>3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">댓글 분석</label>
                         <select name="model_comment_analyzer" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
                             <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="pro" selected>3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">대본 계획</label>
                         <select name="model_script_planner" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
                             <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="pro" selected>3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
                     {% else %}
@@ -2459,10 +2523,10 @@ async function convertAllTtsAI() {
                     <div class="mb-3">
                         <label class="form-label fw-bold">리서치</label>
                         <select name="model_researcher" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
                             <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="pro" selected>3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
 
@@ -2470,9 +2534,9 @@ async function convertAllTtsAI() {
                         <label class="form-label fw-bold">대본 작성</label>
                         <select name="model_script_writer" class="form-select form-select-sm">
                             <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
-                            <option value="2.5-pro" selected>2.5 Pro ($1.25/$10.00)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
                             <option value="flash">3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="pro" selected>3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>
 
@@ -2481,9 +2545,9 @@ async function convertAllTtsAI() {
                     <div class="mb-3">
                         <label class="form-label fw-bold">이미지 프롬프트</label>
                         <select name="model_image_prompter" class="form-select form-select-sm">
-                            <option value="2.5-flash" selected>2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
-                            <option value="flash">3 Flash ($0.50/$3.00)</option>
+                            <option value="flash" selected>3 Flash ($0.50/$3.00)</option>
                             <option value="pro">3 Pro ($2.00/$12.00)</option>
                         </select>
                     </div>

@@ -269,6 +269,97 @@
         </div>
     </div>
 
+    <!-- 스톡 영상 간격 -->
+    <div class="preset-card">
+        <div class="preset-header">
+            <i class="bi bi-camera-video"></i> 스톡 영상 (Freepik)
+        </div>
+        <div class="preset-body">
+            <p class="text-muted mb-3" style="font-size: 0.85em;">
+                매 N번째 씬마다 AI 이미지 대신 Freepik 스톡 영상을 삽입합니다. 나레이션/자막은 유지됩니다.
+            </p>
+            <label class="preset-option {% if project.freepik_interval == 0 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="0"
+                       {% if project.freepik_interval == 0 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-x-lg text-muted"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">사용 안함</div>
+                    <div class="preset-desc">모든 씬에 AI 생성 이미지 사용</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 2 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="2"
+                       {% if project.freepik_interval == 2 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-info"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">매 2씬</div>
+                    <div class="preset-desc">2, 4, 6, 8... 번째 씬에 삽입 (많음)</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 3 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="3"
+                       {% if project.freepik_interval == 3 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-info"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">매 3씬</div>
+                    <div class="preset-desc">2, 5, 8, 11... 번째 씬에 삽입</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 4 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="4"
+                       {% if project.freepik_interval == 4 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-primary"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">
+                        매 4씬 <span class="badge bg-success">권장</span>
+                    </div>
+                    <div class="preset-desc">2, 6, 10, 14... 번째 씬에 삽입</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 5 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="5"
+                       {% if project.freepik_interval == 5 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-info"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">매 5씬</div>
+                    <div class="preset-desc">2, 7, 12, 17... 번째 씬에 삽입</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 6 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="6"
+                       {% if project.freepik_interval == 6 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-info"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">매 6씬</div>
+                    <div class="preset-desc">2, 8, 14, 20... 번째 씬에 삽입</div>
+                </div>
+            </label>
+            <label class="preset-option {% if project.freepik_interval == 8 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="8"
+                       {% if project.freepik_interval == 8 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video text-info"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">매 8씬</div>
+                    <div class="preset-desc">2, 10, 18, 26... 번째 씬에 삽입</div>
+                </div>
+            </label>
+        </div>
+    </div>
+
     <!-- 썸네일 스타일 선택 -->
     <div class="preset-card">
         <div class="preset-header">

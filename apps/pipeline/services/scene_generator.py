@@ -93,7 +93,20 @@ class SceneGeneratorService(BaseStepService):
         skip_image_exists = 0
         skip_no_prompt = 0
 
+        # 스톡 영상 대상 씬 번호 계산
+        interval = self.project.freepik_interval or 0
+        stock_scene_numbers = set()
+        if interval > 0:
+            for s in scenes:
+                if s.scene_number >= 2 and (s.scene_number - 2) % interval == 0:
+                    stock_scene_numbers.add(s.scene_number)
+            if stock_scene_numbers:
+                self.log(f'스톡 영상 대상 씬 {len(stock_scene_numbers)}개 건너뜀: {sorted(stock_scene_numbers)}')
+
         for scene in scenes:
+            if scene.scene_number in stock_scene_numbers:
+                continue
+
             if scene.image:
                 self.log(f'씬 {scene.scene_number} 건너뜀 - 이미지 존재')
                 skip_image_exists += 1
