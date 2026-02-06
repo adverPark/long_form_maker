@@ -169,7 +169,8 @@ JSON 형식:
 3. 영상 주제와 관련된 시각적 요소
 4. 감정: 충격, 호기심, 긴박감 중 택1
 
-프롬프트만 출력 (설명 없이, 색상 지정 없이):"""
+프롬프트만 출력 (설명 없이, 색상 지정 없이)
+주의: "8k resolution", "photorealistic", "hyper-realistic", "dramatic lighting", "high contrast" 같은 상투적 수식어 사용 금지. 구체적인 장면 묘사에 집중할 것.:"""
 
         try:
             thumb_response = self.call_gemini(thumb_prompt)
