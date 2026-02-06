@@ -138,7 +138,7 @@ JSON 형식:
         self.raise_if_cancelled()
 
         excluded_keywords = {'유흥', '술집', '노래방', '호프', '소주', '맥주', '주류', '성인'}
-        tags = ['경제', '자영업', '재테크', '돈', '투자']
+        tags = []
 
         if info.title:
             words = re.findall(r'[가-힣]+', info.title)
@@ -166,7 +166,7 @@ JSON 형식:
 요구사항:
 1. 클릭을 유도하는 강렬한 이미지
 2. 한글 텍스트 10자 이내 포함
-3. 경제/돈 관련 시각적 요소
+3. 영상 주제와 관련된 시각적 요소
 4. 감정: 충격, 호기심, 긴박감 중 택1
 
 프롬프트만 출력 (설명 없이, 색상 지정 없이):"""
@@ -177,10 +177,10 @@ JSON 형식:
             self.log(f'썸네일 프롬프트: {len(info.thumbnail_prompt)}자')
         except Exception as e:
             self.log(f'썸네일 프롬프트 생성 실패: {e}', 'warning')
-            info.thumbnail_prompt = f"""YouTube thumbnail for Korean economy video.
+            info.thumbnail_prompt = f"""YouTube thumbnail for a Korean video.
 
-Main visual: dramatic money/finance scene with urgency
-Korean text: '{info.title[:10] if info.title else "경제"}'
+Main visual: dramatic scene related to the video topic
+Korean text: '{info.title[:10] if info.title else "영상"}'
 Style: clickbait youtube thumbnail, high contrast, dramatic lighting
 Emotion: shock, curiosity
 

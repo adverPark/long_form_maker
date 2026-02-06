@@ -54,7 +54,7 @@ class ThumbnailGeneratorService(BaseStepService):
         # 신 SDK 클라이언트 생성
         client = genai.Client(api_key=gemini_key)
 
-        prompt = f"""Create a YouTube thumbnail for an economics video.
+        prompt = f"""Create a YouTube thumbnail for a video.
 Title: {title}
 
 Requirements:
@@ -190,23 +190,14 @@ Requirements:
 {title}
 
 설명:
-⚠️ 본 영상은 개인적인 의견이며 투자 권유가 아닙니다. 투자에 대한 책임은 본인에게 있습니다.
-
 {title}
-
-경제 이슈를 쉽고 재미있게 풀어드립니다.
 
 타임라인:
 """
         for time_str, section, section_name in timeline:
             content += f"{time_str} {section_name}\n"
 
-        content += """
-태그:
-경제, 경제뉴스, 경제이슈, 주식, 투자, 재테크, 부동산, 금융, 돈, 자산관리
-
-#경제 #투자 #재테크 #주식 #부동산
-"""
+        content += "\n"
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
