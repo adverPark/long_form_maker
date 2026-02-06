@@ -1965,13 +1965,28 @@ IMPORTANT: Generate a 16:9 aspect ratio image (1280x720 pixels).
 Korean text must be clearly readable with bold font and high contrast."""
 
         contents = [full_prompt]
+        ref_notes = []
+
+        # 이미지 스타일 (style_prompt + 샘플 이미지)
+        image_style = project.image_style
+        if image_style:
+            if image_style.style_prompt:
+                ref_notes.append(f"Image style: {image_style.style_prompt}")
+            sample = image_style.sample_images.first()
+            if sample:
+                try:
+                    sample_img = Image.open(sample.image.path)
+                    contents.append(sample_img)
+                    ref_notes.append("Use the provided image style sample as reference.")
+                except:
+                    pass
 
         # 썸네일 스타일의 예시 이미지 추가
         if thumbnail_style and thumbnail_style.example_image:
             try:
                 example_img = Image.open(thumbnail_style.example_image.path)
                 contents.append(example_img)
-                contents[0] = f"Create a thumbnail in the same style as the reference image.\n\n{contents[0]}"
+                ref_notes.append("Create a thumbnail in the same style as the thumbnail reference image.")
             except:
                 pass
 
@@ -1980,9 +1995,13 @@ Korean text must be clearly readable with bold font and high contrast."""
             try:
                 char_img = Image.open(project.character.image.path)
                 contents.append(char_img)
-                contents[0] = f"Include the character from reference. {project.character.character_prompt}\n\n{contents[0]}"
+                ref_notes.append(f"Include the character from reference. {project.character.character_prompt}")
             except:
                 pass
+
+        # 참조 정보를 프롬프트 앞에 추가
+        if ref_notes:
+            contents[0] = '\n'.join(ref_notes) + '\n\n' + contents[0]
 
         # Gemini 호출
         logger.info(f'[Thumbnail] Project {pk}: Gemini 이미지 생성 시작, model=gemini-3-pro-image-preview')

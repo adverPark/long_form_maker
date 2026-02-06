@@ -86,30 +86,54 @@ Requirements:
             self.log(f'Gemini 이미지 생성 중... (키: {gemini_key[:10]}...)')
 
             contents = [prompt]
+            ref_notes = []
 
-            # 썸네일 스타일 예시 이미지 추가
+            # 이미지 스타일 (style_prompt + 샘플 이미지)
+            image_style = self.project.image_style
+            if image_style:
+                if image_style.style_prompt:
+                    ref_notes.append(f"Image style: {image_style.style_prompt}")
+                    self.log(f'이미지 스타일 프롬프트 사용: {image_style.name}')
+                sample = image_style.sample_images.first()
+                if sample:
+                    try:
+                        sample_img = Image.open(sample.image.path)
+                        img_buf = io.BytesIO()
+                        sample_img.save(img_buf, format='PNG')
+                        contents.append(types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
+                        ref_notes.append("Use the provided image style sample as reference.")
+                        self.log(f'이미지 스타일 샘플 이미지 사용')
+                    except Exception as e:
+                        self.log(f'이미지 스타일 샘플 로드 실패: {e}', 'warning')
+
+            # 썸네일 스타일 예시 이미지
             thumbnail_style = self.project.thumbnail_style
             if thumbnail_style and thumbnail_style.example_image:
                 try:
                     style_img = Image.open(thumbnail_style.example_image.path)
                     img_buf = io.BytesIO()
                     style_img.save(img_buf, format='PNG')
-                    contents.insert(0, types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
-                    contents[1] = f"Create a thumbnail in the same style as the reference image.\n\n{contents[1]}"
+                    contents.append(types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
+                    ref_notes.append("Create a thumbnail in the same style as the thumbnail reference image.")
                     self.log(f'썸네일 스타일 예시 이미지 사용: {thumbnail_style.name}')
                 except Exception as e:
                     self.log(f'썸네일 스타일 이미지 로드 실패: {e}', 'warning')
 
-            # 캐릭터 시트 추가
+            # 캐릭터 시트
             if character_sheet.exists():
                 try:
                     char_img = Image.open(character_sheet)
                     img_buf = io.BytesIO()
                     char_img.save(img_buf, format='PNG')
                     contents.append(types.Part.from_bytes(data=img_buf.getvalue(), mime_type='image/png'))
+                    ref_notes.append("Include the character from the character reference image.")
                     self.log('캐릭터 시트 참조 사용')
                 except Exception as e:
                     self.log(f'캐릭터 시트 로드 실패: {e}', 'warning')
+
+            # 참조 정보를 프롬프트 앞에 추가
+            if ref_notes:
+                contents[0] = '\n'.join(ref_notes) + '\n\n' + contents[0]
 
             response = client.models.generate_content(
                 model='gemini-3-pro-image-preview',
