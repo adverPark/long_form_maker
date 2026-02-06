@@ -158,11 +158,28 @@ JSON 형식:
         intro_narrations = [s['narration'] for s in scene_info_list[:5]]
         intro_text = ' '.join(intro_narrations)[:500]
 
+        # 프로젝트 설정 정보 수집
+        context_notes = []
+        if self.project.character:
+            char = self.project.character
+            char_desc = char.character_prompt or char.name
+            context_notes.append(f"채널 캐릭터: {char_desc} (참조 이미지 별도 제공됨 - 썸네일에 반드시 포함)")
+        if self.project.image_style and self.project.image_style.style_prompt:
+            context_notes.append(f"이미지 스타일: {self.project.image_style.style_prompt}")
+        if self.project.thumbnail_style:
+            ts = self.project.thumbnail_style
+            if ts.description:
+                context_notes.append(f"썸네일 스타일: {ts.description}")
+
+        context_section = ""
+        if context_notes:
+            context_section = "\n프로젝트 설정:\n" + "\n".join(f"- {n}" for n in context_notes) + "\n"
+
         thumb_prompt = f"""YouTube 썸네일 이미지 생성 프롬프트를 영어로 작성해주세요.
 
 영상 제목: {info.title}
 영상 시작 내용: {intro_text}
-
+{context_section}
 요구사항:
 1. 클릭을 유도하는 강렬한 이미지
 2. 한글 텍스트 10자 이내 포함
