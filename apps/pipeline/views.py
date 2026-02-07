@@ -1138,41 +1138,11 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                                 for p in [tmp_in_path, tmp_out_path]:
                                     if os.path.exists(p):
                                         os.unlink(p)
-            except Exception:
-                file_data = None  # 웹사이트 실패, API 폴백
+            except Exception as e:
+                return JsonResponse({'success': False, 'message': f'다운로드 실패: {str(e)[:100]}. 쿠키 만료 여부 확인하세요.'})
 
-        # API 다운로드 폴백
         if not file_data:
-            dl_resp = http_requests.get(
-                f'https://api.freepik.com/v1/videos/{selected["id"]}/download',
-                headers=headers, timeout=15
-            )
-            if dl_resp.status_code == 403:
-                return JsonResponse({'success': False, 'message': '다운로드 권한 없음'})
-            dl_resp.raise_for_status()
-            download_url = dl_resp.json().get('data', {}).get('url')
-            if not download_url:
-                return JsonResponse({'success': False, 'message': '다운로드 URL 없음'})
-            file_resp = http_requests.get(download_url, timeout=180)
-            file_resp.raise_for_status()
-            file_data = file_resp.content
-            download_method = 'api'
-            # API 다운로드는 항상 변환 필요
-            with tempfile.NamedTemporaryFile(suffix='.mov', delete=False) as tmp_in:
-                tmp_in.write(file_data)
-                tmp_in_path = tmp_in.name
-            tmp_out_path = tmp_in_path.replace('.mov', '_converted.mp4')
-            try:
-                cmd = ['ffmpeg', '-y', '-i', tmp_in_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-                       '-vf', 'scale=-2:1080', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', tmp_out_path]
-                result = subprocess.run(cmd, capture_output=True, timeout=120)
-                if result.returncode == 0:
-                    with open(tmp_out_path, 'rb') as f:
-                        file_data = f.read()
-            finally:
-                for p in [tmp_in_path, tmp_out_path]:
-                    if os.path.exists(p):
-                        os.unlink(p)
+            return JsonResponse({'success': False, 'message': '다운로드 실패 - 쿠키 만료 여부 확인하세요.'})
 
         # 5. 저장
         video_id = str(selected['id'])

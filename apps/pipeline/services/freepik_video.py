@@ -300,18 +300,17 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
     # =============================================
 
     def _download_video(self, video_id: str, api_key: str) -> bytes:
-        """Freepik 영상 다운로드 (웹사이트 쿠키 우선, 실패 시 API 폴백)"""
-        # 1. 웹사이트 쿠키로 무료 다운로드 시도
+        """Freepik 영상 다운로드 (웹사이트 쿠키만 사용)"""
         cookie = self.get_freepik_cookie()
         wallet_id = self.get_freepik_wallet()
-        if cookie and wallet_id:
-            result = self._download_via_website(video_id, cookie, wallet_id)
-            if result:
-                return result
-            self.log('웹사이트 다운로드 실패, API 폴백', 'warning')
+        if not cookie or not wallet_id:
+            self.log('Freepik 쿠키 또는 walletId 미설정 - 설정에서 추가하세요', 'error')
+            return None
 
-        # 2. API 다운로드 (유료)
-        return self._download_via_api(video_id, api_key)
+        result = self._download_via_website(video_id, cookie, wallet_id)
+        if not result:
+            self.log('웹사이트 다운로드 실패 - 쿠키 만료 여부 확인하세요', 'error')
+        return result
 
     def _download_via_website(self, video_id: str, cookie: str, wallet_id: str) -> bytes:
         """Freepik 웹사이트 쿠키로 무료 다운로드 (프리미엄 구독 활용)"""
@@ -367,56 +366,6 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                 self.log(f'웹사이트 다운로드 오류 (시도 {attempt + 1}): {str(e)[:80]}', 'error')
                 if attempt < self.MAX_RETRIES - 1:
                     time.sleep(2)
-                    continue
-
-        return None
-
-    def _download_via_api(self, video_id: str, api_key: str) -> bytes:
-        """Freepik API로 영상 다운로드 (유료)"""
-        headers = {
-            'x-freepik-api-key': api_key,
-            'Accept': 'application/json',
-        }
-
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                resp = requests.get(
-                    f'{self.FREEPIK_API_BASE}/videos/{video_id}/download',
-                    headers=headers,
-                    timeout=15
-                )
-
-                if resp.status_code == 429:
-                    time.sleep(2 * (attempt + 1))
-                    continue
-
-                if resp.status_code == 403:
-                    self.log(f'API 다운로드 권한 없음 (ID={video_id})', 'error')
-                    return None
-
-                resp.raise_for_status()
-                download_info = resp.json()
-
-                download_url = download_info.get('data', {}).get('url')
-                if not download_url:
-                    self.log(f'API 다운로드 URL 없음 (ID={video_id})', 'error')
-                    return None
-
-                # 파일 다운로드
-                file_resp = requests.get(download_url, timeout=180)
-                file_resp.raise_for_status()
-                raw_data = file_resp.content
-                raw_mb = len(raw_data) / 1024 / 1024
-                self.log(f'API 다운로드 완료: {raw_mb:.1f}MB (유료)')
-
-                # H.264 변환
-                file_data = self._convert_to_h264(raw_data)
-                return file_data
-
-            except Exception as e:
-                self.log(f'API 다운로드 오류 (시도 {attempt + 1}): {str(e)[:80]}', 'error')
-                if attempt < self.MAX_RETRIES - 1:
-                    time.sleep(1)
                     continue
 
         return None
