@@ -2,7 +2,7 @@ import json
 import re
 from pydantic import BaseModel, Field
 from .base import BaseStepService
-from apps.pipeline.models import Draft
+from apps.pipeline.models import Draft, Research
 
 
 class ScriptResponse(BaseModel):
@@ -152,11 +152,10 @@ class ScriptWriterService(BaseStepService):
                 'best_title': {'title': '', 'hook': ''},
             }
 
-        # Research 모델이 있는지 확인
-        if not hasattr(self.project, 'research') or not self.project.research:
+        # Research 모델이 있는지 확인 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
+        r = Research.objects.filter(project=self.project).first()
+        if not r:
             return None
-
-        r = self.project.research
 
         # manual_notes만 있는 경우 (리서치 실행 안하고 수동 자료만 입력한 경우)
         if r.manual_notes and not r.summary:

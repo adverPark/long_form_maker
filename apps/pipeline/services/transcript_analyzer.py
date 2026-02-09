@@ -122,11 +122,11 @@ class TranscriptAnalyzerService(BaseStepService):
     def execute(self):
         self.update_progress(5, '자막 데이터 준비 중...')
 
-        # Research 확인
-        if not hasattr(self.project, 'research') or not self.project.research:
+        # Research 확인 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
+        research = Research.objects.filter(project=self.project).first()
+        if not research:
             raise ValueError('리서치 데이터가 없습니다. YouTube 수집을 먼저 실행하세요.')
 
-        research = self.project.research
         transcript = research.transcript or ''
 
         if not transcript:

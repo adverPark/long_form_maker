@@ -144,6 +144,40 @@ class TTSGeneratorService(BaseStepService):
 
         return (mapped_srt, is_valid, srt_word_count, narration_word_count)
 
+    def _time_to_seconds(self, time_str: str) -> float:
+        """SRT 시간 문자열을 초로 변환 (00:00:07,171 → 7.171)"""
+        time_str = time_str.replace(',', '.')
+        parts = time_str.split(':')
+        return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+
+    def _check_audio_truncation(self, srt_timings: list) -> tuple:
+        """오디오 잘림 감지 - 마지막 단어들의 duration이 비정상적으로 짧으면 잘림 판단
+
+        Returns:
+            tuple: (is_truncated: bool, details: str)
+        """
+        if not srt_timings or len(srt_timings) < 2:
+            return False, ''
+
+        # 마지막 3개 단어 검사
+        check_count = min(3, len(srt_timings))
+        truncated_words = []
+
+        for timing in srt_timings[-check_count:]:
+            start = self._time_to_seconds(timing['start'])
+            end = self._time_to_seconds(timing['end'])
+            duration = end - start
+            word = timing['text']
+
+            # 2글자 이상 단어인데 duration이 0.15초 미만이면 잘림 의심
+            if len(word) >= 2 and duration < 0.15:
+                truncated_words.append(f'{word}({duration:.3f}s)')
+
+        if truncated_words:
+            return True, ', '.join(truncated_words)
+
+        return False, ''
+
     def execute(self):
         self.update_progress(5, '씬 로딩 중...')
         self._lock = threading.Lock()  # 스레드 안전을 위한 락
@@ -216,6 +250,7 @@ class TTSGeneratorService(BaseStepService):
         success_count = 0
         error_count = 0
         warning_count = 0
+        truncated_scenes = []  # 잘림 감지된 씬 (재시도 대상)
         processed = 0
 
         for batch_start in range(0, len(scenes_to_process), self.BATCH_SIZE):
@@ -231,12 +266,12 @@ class TTSGeneratorService(BaseStepService):
                 future_to_scene = {
                     executor.submit(
                         self._generate_tts, tts_text, voice, ref_audio_b64, ref_text
-                    ): (scene, original_narration)
+                    ): (scene, tts_text, original_narration)
                     for scene, tts_text, original_narration in batch
                 }
 
                 for future in as_completed(future_to_scene):
-                    scene, original_narration = future_to_scene[future]
+                    scene, tts_text, original_narration = future_to_scene[future]
                     scene_num = scene.scene_number
                     processed += 1
 
@@ -275,9 +310,31 @@ class TTSGeneratorService(BaseStepService):
                                     # 자막 상태 저장
                                     scene.subtitle_word_count = srt_word_count
                                     scene.narration_word_count = narration_word_count
-                                    scene.subtitle_status = 'matched' if is_valid else 'mismatch'
 
-                                    if not is_valid:
+                                    # 오디오 잘림 감지
+                                    is_truncated = False
+                                    if srt_word_count < narration_word_count:
+                                        # 단어 누락 = 명확한 잘림
+                                        is_truncated = True
+                                        self._thread_log(
+                                            f'⚠️ 씬 {scene_num}: 오디오 잘림 - 단어 누락 ({narration_word_count - srt_word_count}개)',
+                                            'warning'
+                                        )
+                                    elif is_valid:
+                                        # 단어 수 일치해도 마지막 단어 duration 짧으면 잘림
+                                        is_truncated, truncation_detail = self._check_audio_truncation(srt_timings)
+                                        if is_truncated:
+                                            self._thread_log(
+                                                f'⚠️ 씬 {scene_num}: 오디오 잘림 - {truncation_detail}',
+                                                'warning'
+                                            )
+
+                                    if is_truncated:
+                                        scene.subtitle_status = 'truncated'
+                                    elif is_valid:
+                                        scene.subtitle_status = 'matched'
+                                    else:
+                                        scene.subtitle_status = 'mismatch'
                                         warning_count += 1
 
                                     # 매핑된 SRT 저장
@@ -306,9 +363,14 @@ class TTSGeneratorService(BaseStepService):
                                 'subtitle_status': scene.subtitle_status,
                             }
                             Scene.objects.filter(pk=scene.pk).update(**update_fields)
-                            with self._lock:
-                                self.log(f'씬 {scene_num} 저장 완료')
-                            success_count += 1
+                            if scene.subtitle_status == 'truncated':
+                                with self._lock:
+                                    self.log(f'씬 {scene_num} 저장 (잘림 감지 - 재시도 대상)')
+                                    truncated_scenes.append((scene, tts_text, original_narration))
+                            else:
+                                with self._lock:
+                                    self.log(f'씬 {scene_num} 저장 완료')
+                                success_count += 1
                         else:
                             self.log(f'씬 {scene_num} 생성 실패', 'error')
                             error_count += 1
@@ -318,6 +380,122 @@ class TTSGeneratorService(BaseStepService):
 
                     progress = 5 + int((processed / len(scenes_to_process)) * 90)
                     self.update_progress(progress, f'{processed}/{len(scenes_to_process)} TTS 생성 중...')
+
+        # 잘림 감지된 씬 재시도
+        MAX_TRUNCATION_RETRIES = 2
+        for retry_round in range(MAX_TRUNCATION_RETRIES):
+            if not truncated_scenes:
+                break
+
+            self.log(f'오디오 잘림 재시도 [{retry_round + 1}/{MAX_TRUNCATION_RETRIES}]: {len(truncated_scenes)}개 씬')
+            still_truncated = []
+
+            # 시드 변경 (원본 시드 + 라운드 오프셋)
+            base_seed = voice.seed if voice else 42
+            retry_seed = base_seed + (retry_round + 1) * 100
+            self.log(f'시드 변경: {base_seed} → {retry_seed}')
+
+            for scene, retry_tts_text, retry_narration in truncated_scenes:
+                scene_num = scene.scene_number
+                self.log(f'씬 {scene_num} 재생성 중... (시드: {retry_seed})')
+
+                # 기존 오디오/자막 삭제
+                try:
+                    if scene.audio:
+                        scene.audio.delete(save=False)
+                    if scene.subtitle_file:
+                        scene.subtitle_file.delete(save=False)
+                except Exception:
+                    pass
+                Scene.objects.filter(pk=scene.pk).update(
+                    audio='', subtitle_file='', subtitle_status='', audio_duration=0
+                )
+
+                # TTS 재생성 (시드 변경 + 캐시 비활성화)
+                result = self._generate_tts(retry_tts_text, voice, ref_audio_b64, ref_text, seed_override=retry_seed, disable_cache=True)
+                if not result:
+                    self.log(f'씬 {scene_num} 재생성 실패', 'error')
+                    error_count += 1
+                    continue
+
+                audio_data, srt_data = result
+
+                # 오디오 저장
+                filename = f'scene_{scene_num:02d}.wav'
+                scene.audio.save(filename, ContentFile(audio_data), save=False)
+
+                try:
+                    import wave as wave_mod
+                    with wave_mod.open(io.BytesIO(audio_data), 'rb') as wav:
+                        scene.audio_duration = wav.getnframes() / float(wav.getframerate())
+                except Exception:
+                    scene.audio_duration = 0
+
+                # 자막 재검증
+                retry_truncated = False
+                if srt_data:
+                    srt_content = srt_data.decode('utf-8')
+                    srt_timings = self._parse_srt_timings(srt_content)
+
+                    if srt_timings and retry_narration:
+                        mapped_srt, is_valid, srt_wc, narr_wc = self._map_srt_to_narration(
+                            srt_timings, retry_narration, scene_num
+                        )
+                        scene.subtitle_word_count = srt_wc
+                        scene.narration_word_count = narr_wc
+
+                        # 잘림 재검사
+                        if srt_wc < narr_wc:
+                            retry_truncated = True
+                            self.log(f'씬 {scene_num}: 재시도 후에도 단어 누락 ({narr_wc - srt_wc}개)', 'warning')
+                        elif is_valid:
+                            is_trunc, trunc_detail = self._check_audio_truncation(srt_timings)
+                            if is_trunc:
+                                retry_truncated = True
+                                self.log(f'씬 {scene_num}: 재시도 후에도 잘림 - {trunc_detail}', 'warning')
+
+                        if retry_truncated:
+                            scene.subtitle_status = 'truncated'
+                        elif is_valid:
+                            scene.subtitle_status = 'matched'
+                        else:
+                            scene.subtitle_status = 'mismatch'
+
+                        srt_filename = f'scene_{scene_num:02d}.srt'
+                        scene.subtitle_file.save(
+                            srt_filename, ContentFile(mapped_srt.encode('utf-8')), save=False
+                        )
+                    else:
+                        scene.subtitle_status = 'none'
+                else:
+                    scene.subtitle_status = 'none'
+
+                # DB 저장
+                Scene.objects.filter(pk=scene.pk).update(
+                    audio=scene.audio.name if scene.audio else '',
+                    audio_duration=scene.audio_duration,
+                    subtitle_file=scene.subtitle_file.name if scene.subtitle_file else '',
+                    subtitle_word_count=scene.subtitle_word_count,
+                    narration_word_count=scene.narration_word_count,
+                    subtitle_status=scene.subtitle_status,
+                )
+
+                if retry_truncated:
+                    still_truncated.append((scene, retry_tts_text, retry_narration))
+                    self.log(f'씬 {scene_num} 재시도 후에도 잘림 - 다음 라운드 대기')
+                else:
+                    success_count += 1
+                    self.log(f'씬 {scene_num} 재생성 성공!')
+
+            truncated_scenes = still_truncated
+
+        # 최종 잘림 씬 처리 (재시도 후에도 해결 안 된 경우)
+        if truncated_scenes:
+            truncated_nums = [s[0].scene_number for s in truncated_scenes]
+            self.log(f'⚠️ 재시도 후에도 잘린 씬: {truncated_nums}', 'warning')
+            warning_count += len(truncated_scenes)
+            # 잘렸지만 일단 성공으로 카운트 (오디오는 있으므로)
+            success_count += len(truncated_scenes)
 
         # 완료 처리
         self.log(f'TTS 생성 완료', 'result', {
@@ -344,8 +522,12 @@ class TTSGeneratorService(BaseStepService):
         else:
             self.update_progress(100, f'완료: {success_count}개 생성, {skip_count}개 스킵')
 
-    def _generate_tts(self, text: str, voice, ref_audio_b64: str, ref_text: str) -> tuple:
+    def _generate_tts(self, text: str, voice, ref_audio_b64: str, ref_text: str, seed_override: int = None, disable_cache: bool = False) -> tuple:
         """Fish Speech API로 TTS 생성 (재시도 포함)
+
+        Args:
+            seed_override: 시드 오버라이드 (잘림 재시도 시 다른 시드 사용)
+            disable_cache: 캐시 비활성화 (잘림 재시도 시 다른 결과 유도)
 
         Returns:
             tuple: (audio_data, srt_data) 또는 None
@@ -356,7 +538,8 @@ class TTSGeneratorService(BaseStepService):
         request_data = {
             'text': text,
             'format': 'wav',
-            'use_memory_cache': 'on',  # 캐싱 활성화
+            'use_memory_cache': 'off' if disable_cache else 'on',
+            'max_new_tokens': 2048,
         }
 
         # 프리셋 파라미터
@@ -364,7 +547,7 @@ class TTSGeneratorService(BaseStepService):
             request_data['temperature'] = voice.temperature
             request_data['top_p'] = voice.top_p
             request_data['repetition_penalty'] = voice.repetition_penalty
-            request_data['seed'] = voice.seed
+            request_data['seed'] = seed_override if seed_override is not None else voice.seed
 
             # 참조 음성
             if ref_audio_b64 and ref_text:
@@ -376,7 +559,7 @@ class TTSGeneratorService(BaseStepService):
             # 기본값
             request_data['temperature'] = 0.7
             request_data['top_p'] = 0.7
-            request_data['seed'] = 42
+            request_data['seed'] = seed_override if seed_override is not None else 42
 
         # 재시도 로직
         max_retries = 3

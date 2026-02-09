@@ -195,11 +195,11 @@ class ScriptPlannerService(BaseStepService):
     def execute(self):
         self.update_progress(5, '분석 데이터 준비 중...')
 
-        # Research 확인
-        if not hasattr(self.project, 'research') or not self.project.research:
+        # Research 확인 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
+        research = Research.objects.filter(project=self.project).first()
+        if not research:
             raise ValueError('리서치 데이터가 없습니다.')
 
-        research = self.project.research
         content_analysis = research.content_analysis or {}
 
         transcript_analysis = content_analysis.get('transcript_analysis', '')

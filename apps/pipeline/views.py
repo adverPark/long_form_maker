@@ -803,7 +803,8 @@ def scene_generate_tts(request, pk, scene_number):
         request_data = {
             'text': text,
             'format': 'wav',
-            'use_memory_cache': 'on',  # 캐싱 활성화
+            'use_memory_cache': 'on',
+            'max_new_tokens': 2048,
         }
 
         # 프리셋 파라미터
@@ -826,22 +827,58 @@ def scene_generate_tts(request, pk, scene_number):
             request_data['top_p'] = 0.7
             request_data['seed'] = 42
 
-        response = requests.post(
-            f'{settings.FISH_SPEECH_URL}/v1/tts',
-            json=request_data,
-            timeout=180
-        )
+        # 자막용: 원본 narration 전처리
+        clean_narration = original_narration
+        for char in quote_chars:
+            clean_narration = clean_narration.replace(char, "")
+        clean_narration = re.sub(r'…+', '...', clean_narration)
+        clean_narration = re.sub(r'\s+', ' ', clean_narration).strip()
+        narration_word_count = len(clean_narration.split())
 
-        if response.status_code == 200:
+        # 잘림 감지용 헬퍼
+        def _time_to_seconds(time_str):
+            time_str = time_str.replace(',', '.')
+            parts = time_str.split(':')
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+
+        def _check_truncation(srt_timings):
+            """마지막 3개 단어 중 2글자 이상인데 0.15초 미만이면 잘림"""
+            if not srt_timings or len(srt_timings) < 2:
+                return False, ''
+            check_count = min(3, len(srt_timings))
+            truncated = []
+            for t in srt_timings[-check_count:]:
+                dur = _time_to_seconds(t['end']) - _time_to_seconds(t['start'])
+                if len(t['text']) >= 2 and dur < 0.15:
+                    truncated.append(f'{t["text"]}({dur:.3f}s)')
+            if truncated:
+                return True, ', '.join(truncated)
+            return False, ''
+
+        # TTS 생성 + 잘림 시 시드 변경 재시도 (최대 3회)
+        base_seed = request_data.get('seed', 42)
+        max_attempts = 3
+        last_truncation_detail = ''
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                # 시드 변경 + 캐시 비활성화 (같은 캐시 결과 방지)
+                new_seed = base_seed + attempt * 100
+                request_data['seed'] = new_seed
+                request_data['use_memory_cache'] = 'off'
+
+            response = requests.post(
+                f'{settings.FISH_SPEECH_URL}/v1/tts',
+                json=request_data,
+                timeout=180
+            )
+
+            if response.status_code != 200:
+                return JsonResponse({'success': False, 'message': f'TTS 실패: HTTP {response.status_code}'})
+
             subtitle_status = 'none'
             subtitle_word_count = 0
-            # 자막용: 원본 narration을 전처리 (따옴표만 제거, narration_tts의 숫자 변환 등은 반영 안함)
-            clean_narration = original_narration
-            for char in quote_chars:
-                clean_narration = clean_narration.replace(char, "")
-            clean_narration = re.sub(r'…+', '...', clean_narration)
-            clean_narration = re.sub(r'\s+', ' ', clean_narration).strip()
-            narration_word_count = len(clean_narration.split())
+            is_truncated = False
 
             # ZIP 응답 처리
             if response.content[:2] == b'PK':
@@ -866,7 +903,7 @@ def scene_generate_tts(request, pk, scene_number):
 
                             subtitle_word_count = len(srt_timings)
 
-                            # 원본 narration 전처리 후 매핑 (따옴표만 제거, narration_tts 숫자변환 미반영)
+                            # 원본 narration 매핑
                             if srt_timings and original_narration:
                                 narration_words = clean_narration.split()
                                 mapped_entries = []
@@ -877,38 +914,56 @@ def scene_generate_tts(request, pk, scene_number):
                                     )
                                 mapped_srt = '\n'.join(mapped_entries)
 
-                                # 매핑된 SRT 저장
                                 scene.subtitle_file.save(
                                     f'scene_{scene_number:02d}.srt',
                                     ContentFile(mapped_srt.encode('utf-8')),
                                     save=False
                                 )
 
-                                # 상태 판정
-                                subtitle_status = 'matched' if subtitle_word_count == narration_word_count else 'mismatch'
-                            break
+                                # 잘림 감지
+                                if subtitle_word_count < narration_word_count:
+                                    is_truncated = True
+                                    last_truncation_detail = f'단어 누락 ({narration_word_count - subtitle_word_count}개)'
+                                elif subtitle_word_count == narration_word_count:
+                                    is_truncated, last_truncation_detail = _check_truncation(srt_timings)
 
-                    # 자막 상태 저장
-                    scene.subtitle_status = subtitle_status
-                    scene.subtitle_word_count = subtitle_word_count
-                    scene.narration_word_count = narration_word_count
-                    scene.save()
+                                if is_truncated:
+                                    subtitle_status = 'truncated'
+                                elif subtitle_word_count == narration_word_count:
+                                    subtitle_status = 'matched'
+                                else:
+                                    subtitle_status = 'mismatch'
+                            break
             else:
                 # 직접 WAV 응답 (자막 없음)
                 scene.audio.save(f'scene_{scene_number:02d}.wav', ContentFile(response.content), save=False)
-                scene.subtitle_status = 'none'
-                scene.save()
 
-            return JsonResponse({
-                'success': True,
-                'audio_url': scene.audio.url,
-                'has_subtitle': bool(scene.subtitle_file),
-                'subtitle_status': scene.subtitle_status,
-                'subtitle_word_count': scene.subtitle_word_count,
-                'narration_word_count': scene.narration_word_count,
-            })
-        else:
-            return JsonResponse({'success': False, 'message': f'TTS 실패: HTTP {response.status_code}'})
+            # 잘림 아니면 루프 탈출
+            if not is_truncated:
+                break
+
+            # 마지막 시도가 아니면 재시도 로그
+            if attempt < max_attempts - 1:
+                import logging
+                logging.info(f'씬 {scene_number} 오디오 잘림 감지 ({last_truncation_detail}), 시드 변경 재시도 {attempt + 2}/{max_attempts}')
+
+        # 저장
+        scene.subtitle_status = subtitle_status
+        scene.subtitle_word_count = subtitle_word_count
+        scene.narration_word_count = narration_word_count
+        scene.save()
+
+        result = {
+            'success': True,
+            'audio_url': scene.audio.url,
+            'has_subtitle': bool(scene.subtitle_file),
+            'subtitle_status': scene.subtitle_status,
+            'subtitle_word_count': scene.subtitle_word_count,
+            'narration_word_count': scene.narration_word_count,
+        }
+        if subtitle_status == 'truncated':
+            result['message'] = f'오디오 잘림 감지 ({last_truncation_detail}) - {max_attempts}회 시도 후에도 해결 안 됨'
+        return JsonResponse(result)
 
     except Exception as e:
         return JsonResponse({'success': False, 'message': str(e)[:100]})

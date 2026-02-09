@@ -63,11 +63,12 @@ class ResearcherService(BaseStepService):
     def execute(self):
         self.update_progress(5, '리서치 시작...')
 
-        # 대본 계획 확인 (필수)
-        if not hasattr(self.project, 'research') or not self.project.research:
+        # 대본 계획 확인 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
+        research = Research.objects.filter(project=self.project).first()
+        if not research:
             raise ValueError('먼저 대본 계획을 실행해주세요.')
 
-        content_analysis = self.project.research.content_analysis or {}
+        content_analysis = research.content_analysis or {}
         script_plan = content_analysis.get('script_plan', '')
 
         if not script_plan:
@@ -416,8 +417,8 @@ search_web 도구로 각 항목을 검색하고, 완료되면 Markdown 형식으
                     'url': url,
                 })
 
-        # 기존 Research 가져오기
-        research = self.project.research
+        # 기존 Research 가져오기 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
+        research = Research.objects.get(project=self.project)
         content_analysis = research.content_analysis or {}
 
         # 리서치 결과 추가

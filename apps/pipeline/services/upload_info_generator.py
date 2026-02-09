@@ -2,7 +2,7 @@ import json
 import re
 import wave
 from .base import BaseStepService
-from apps.pipeline.models import UploadInfo
+from apps.pipeline.models import UploadInfo, Research
 
 
 class UploadInfoGeneratorService(BaseStepService):
@@ -47,10 +47,10 @@ class UploadInfoGeneratorService(BaseStepService):
         total_mins = int(total_duration // 60)
         total_secs = int(total_duration % 60)
 
-        # script_plan 가져오기
+        # script_plan 가져오기 (DB에서 최신 데이터 직접 읽기 - ORM 캐시 회피)
         script_plan = ''
         try:
-            research = self.project.research
+            research = Research.objects.filter(project=self.project).first()
             if research and research.content_analysis:
                 script_plan = research.content_analysis.get('script_plan', '')
                 if script_plan:

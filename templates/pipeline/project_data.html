@@ -952,6 +952,9 @@
                         {% elif scene.subtitle_status == 'mismatch' %}
                         <i class="bi bi-exclamation-triangle-fill text-warning"></i><br>
                         {{ scene.subtitle_word_count }}/{{ scene.narration_word_count }}
+                        {% elif scene.subtitle_status == 'truncated' %}
+                        <i class="bi bi-exclamation-triangle-fill text-danger"></i><br>
+                        {{ scene.subtitle_word_count }}자 잘림
                         {% elif scene.subtitle_status == 'incomplete' %}
                         <i class="bi bi-x-circle-fill text-danger"></i><br>
                         {{ scene.subtitle_word_count }}/{{ scene.narration_word_count }} 불완전
@@ -1696,6 +1699,8 @@ async function generateSceneTTS(sceneNumber) {
                     subtitleStatus.innerHTML = `<i class="bi bi-check-circle-fill text-success"></i><br>${data.subtitle_word_count}자`;
                 } else if (data.subtitle_status === 'mismatch') {
                     subtitleStatus.innerHTML = `<i class="bi bi-exclamation-triangle-fill text-warning"></i><br>${data.subtitle_word_count}/${data.narration_word_count}`;
+                } else if (data.subtitle_status === 'truncated') {
+                    subtitleStatus.innerHTML = `<i class="bi bi-exclamation-triangle-fill text-danger"></i><br>${data.subtitle_word_count}자 잘림`;
                 } else if (data.subtitle_status === 'incomplete') {
                     subtitleStatus.innerHTML = `<i class="bi bi-x-circle-fill text-danger"></i><br>${data.subtitle_word_count}/${data.narration_word_count} 불완전`;
                 } else {

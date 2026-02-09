@@ -136,9 +136,10 @@ class AutoPipelineService(BaseStepService):
         if model_settings:
             self.log(f'모델 설정: {model_settings}')
 
-        # 이미 있는 데이터 확인
-        has_research = hasattr(self.project, 'research') and self.project.research
-        has_draft = hasattr(self.project, 'draft') and self.project.draft
+        # 이미 있는 데이터 확인 (DB 직접 쿼리 - ORM 캐시로 인한 stale 데이터 방지)
+        from apps.pipeline.models import Research, Draft
+        has_research = Research.objects.filter(project=self.project).exists()
+        has_draft = Draft.objects.filter(project=self.project).exists()
         has_scenes = self.project.scenes.exists()
 
         skip_steps = set()
