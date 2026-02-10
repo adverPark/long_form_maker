@@ -380,7 +380,8 @@ def auto_pipeline(request, pk):
         'script_planner': request.POST.get('model_script_planner', '2.5-flash'),
         'researcher': request.POST.get('model_researcher', '2.5-flash'),
         'script_writer': request.POST.get('model_script_writer', '2.5-pro'),
-        'image_prompter': request.POST.get('model_image_prompter', '2.5-flash'),
+        'tts_converter': request.POST.get('model_tts_converter', 'flash'),
+        'image_prompter': request.POST.get('model_image_prompter', 'flash'),
     }
 
     # auto_pipeline 스텝 생성 (없으면)
@@ -849,7 +850,7 @@ def scene_generate_tts(request, pk, scene_number):
             truncated = []
             for t in srt_timings[-check_count:]:
                 dur = _time_to_seconds(t['end']) - _time_to_seconds(t['start'])
-                if len(t['text']) >= 2 and dur < 0.15:
+                if len(t['text']) >= 2 and dur < 0.10:
                     truncated.append(f'{t["text"]}({dur:.3f}s)')
             if truncated:
                 return True, ', '.join(truncated)
@@ -1881,7 +1882,7 @@ JSON 형식:
 
     # 태그 생성 (19금 키워드 제외)
     excluded_keywords = {'유흥', '술집', '노래방', '호프', '소주', '맥주', '주류', '성인'}
-    tags = ['경제', '자영업', '재테크', '돈', '투자']
+    tags = []
 
     # 제목에서 키워드 추출
     if info.title:
@@ -1908,7 +1909,7 @@ JSON 형식:
 요구사항:
 1. 클릭을 유도하는 강렬한 이미지
 2. 한글 텍스트 10자 이내 포함
-3. 경제/돈 관련 시각적 요소
+3. 영상 주제와 관련된 시각적 요소
 4. 감정: 충격, 호기심, 긴박감 중 택1
 
 프롬프트만 출력 (설명 없이, 색상 지정 없이):"""
@@ -1921,10 +1922,10 @@ JSON 형식:
 
     except Exception as e:
         # 실패 시 기본 프롬프트
-        info.thumbnail_prompt = f"""YouTube thumbnail for Korean economy video.
+        info.thumbnail_prompt = f"""YouTube thumbnail for Korean video.
 
-Main visual: dramatic money/finance scene with urgency
-Korean text: '{info.title[:10] if info.title else "경제"}'
+Main visual: dramatic scene related to the topic with urgency
+Korean text: '{info.title[:10] if info.title else project.name[:10]}'
 Style: clickbait youtube thumbnail, high contrast, dramatic lighting
 Emotion: shock, curiosity
 

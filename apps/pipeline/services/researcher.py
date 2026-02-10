@@ -175,7 +175,7 @@ class ResearcherService(BaseStepService):
         """웹 검색 도구 - Gemini가 호출함
 
         Args:
-            query: 검색할 내용 (예: "자영업 폐업률 2025 통계")
+            query: 검색할 내용 (예: "관련 주제 2025 통계")
             is_retry: 재시도인 경우 True (카운트 증가 안 함)
 
         Returns:

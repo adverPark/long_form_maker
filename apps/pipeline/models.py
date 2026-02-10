@@ -76,7 +76,7 @@ class Project(models.Model):
 
     # 스톡 영상 간격 (0=사용 안함)
     freepik_interval = models.IntegerField(
-        default=0, verbose_name="스톡 영상 간격",
+        default=2, verbose_name="스톡 영상 간격",
         help_text="N번째 씬마다 스톡 영상 삽입 (0=사용 안함)"
     )
 
@@ -128,6 +128,22 @@ class Project(models.Model):
                     clip_file.unlink()
                 except Exception:
                     pass
+            # concat 리스트 파일
+            concat_file = temp_clips_dir / f'{self.pk}_concat.txt'
+            if concat_file.exists():
+                try:
+                    concat_file.unlink()
+                except Exception:
+                    pass
+
+        # ASS 자막 디렉토리 삭제 (video_composer 생성)
+        import shutil
+        ass_dir = Path(settings.MEDIA_ROOT) / 'projects' / 'subtitles' / str(self.pk)
+        if ass_dir.exists():
+            try:
+                shutil.rmtree(ass_dir)
+            except Exception:
+                pass
 
         super().delete(*args, **kwargs)
 

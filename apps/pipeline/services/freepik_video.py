@@ -1,17 +1,17 @@
-"""Freepik 스톡 영상 서비스
+"""Freepik 스톡 영상 서비스 (Playwright 브라우저 자동화)
 
 매 N번째 씬마다 AI 생성 이미지 대신 Freepik 스톡 영상으로 교체.
 나레이션/TTS/자막은 유지하고 비주얼만 스톡 영상으로 변경.
 
 흐름:
 1. LLM(Flash)으로 씬에서 검색 키워드 2개 추출
-2. Freepik API로 키워드별 영상 목록 수집 (무료만)
+2. Playwright 브라우저로 kr.freepik.com 검색 페이지 스크래핑
 3. LLM이 나레이션과 가장 어울리는 영상 선택
-4. 다운로드 및 저장 (사용한 ID 추적하여 중복 방지)
+4. 브라우저 컨텍스트에서 fetch()로 다운로드 (Firebase 토큰 자동 갱신)
 
-Freepik API 응답 구조:
-- 검색: data[].{id, name, duration("HH:MM:SS"), premium(0|1), quality, thumbnails, previews}
-- 다운로드: data.{url, filename} (무료 영상만, premium=1은 403)
+기존 쿠키 기반 requests 방식 대비 장점:
+- GR_TOKEN 만료 시 브라우저의 Firebase SDK가 자동 갱신
+- API key 불필요 (검색도 브라우저로 수행)
 """
 
 import os
@@ -20,6 +20,7 @@ import time
 import subprocess
 import tempfile
 import requests
+from urllib.parse import quote_plus
 from django.core.files.base import ContentFile
 from .base import BaseStepService
 from apps.pipeline.models import Scene
@@ -30,20 +31,17 @@ class FreepikVideoService(BaseStepService):
 
     agent_name = 'freepik_video'
 
-    FREEPIK_API_BASE = 'https://api.freepik.com/v1'
     MAX_RETRIES = 3
-    MAX_CANDIDATES = 15  # LLM에 넘길 최대 후보 수
 
     def execute(self):
+        # Playwright sync API가 asyncio 루프를 생성하므로 Django ORM 호출 허용
+        os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+
         interval = self.project.freepik_interval
         if not interval or interval <= 0:
             self.log('스톡 영상 간격이 0 - 스킵')
             self.update_progress(100, '스킵 (간격 미설정)')
             return
-
-        # API 키 확인
-        api_key = self.get_freepik_key()
-        self.log('Freepik API 키 확인 완료')
 
         # 전체 씬 로드
         scenes = list(self.project.scenes.all().order_by('scene_number'))
@@ -74,29 +72,39 @@ class FreepikVideoService(BaseStepService):
         if used_ids:
             self.log(f'이미 사용된 영상 ID {len(used_ids)}개')
 
+        # 브라우저 시작
+        pw, browser, context, page = self._start_browser()
+        if not page:
+            raise Exception('브라우저 시작 실패')
+
         success_count = 0
         error_count = 0
 
-        for i, scene in enumerate(target_scenes):
-            self.raise_if_cancelled()
+        try:
+            for i, scene in enumerate(target_scenes):
+                self.raise_if_cancelled()
 
-            progress = int((i / len(target_scenes)) * 90) + 5
-            self.update_progress(progress, f'씬 {scene.scene_number} 처리 중...')
+                progress = int((i / len(target_scenes)) * 90) + 5
+                self.update_progress(progress, f'씬 {scene.scene_number} 처리 중...')
 
-            try:
-                result = self._process_scene(scene, api_key, used_ids)
-                if result:
-                    success_count += 1
-                    self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료')
-                else:
+                try:
+                    result = self._process_scene(scene, page, used_ids)
+                    if result:
+                        success_count += 1
+                        self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료')
+                    else:
+                        error_count += 1
+                        self.log(f'씬 {scene.scene_number} 적합한 영상 없음 - 스킵', 'warning')
+                except Exception as e:
                     error_count += 1
-                    self.log(f'씬 {scene.scene_number} 적합한 영상 없음 - 스킵', 'warning')
-            except Exception as e:
-                error_count += 1
-                self.log(f'씬 {scene.scene_number} 실패: {str(e)[:100]}', 'error')
+                    self.log(f'씬 {scene.scene_number} 실패: {str(e)[:100]}', 'error')
 
-            # API rate limit 방지
-            time.sleep(0.5)
+                # rate limit 방지
+                time.sleep(1)
+        finally:
+            browser.close()
+            pw.stop()
+            self.log('브라우저 종료')
 
         self.log(f'완료: 성공 {success_count}, 실패 {error_count}', 'result')
         self.update_progress(100, f'완료 ({success_count}개 성공)')
@@ -104,7 +112,153 @@ class FreepikVideoService(BaseStepService):
         if error_count > success_count and success_count == 0:
             raise Exception(f'모든 씬 실패 ({error_count}개)')
 
-    def _process_scene(self, scene, api_key: str, used_ids: set) -> bool:
+    # =============================================
+    # 브라우저 관리
+    # =============================================
+
+    def _start_browser(self):
+        """Playwright 브라우저 시작 + 로그인 (이메일/비번 우선, 쿠키 fallback)"""
+        from playwright.sync_api import sync_playwright
+
+        wallet_id = self.get_freepik_wallet()
+        if not wallet_id:
+            self.log('Freepik walletId 미설정 - 설정에서 추가하세요', 'error')
+            return None, None, None, None
+
+        cookie_str = self.get_freepik_cookie()
+
+        if not cookie_str:
+            self.log('Freepik 쿠키 미설정 - 설정에서 추가하세요', 'error')
+            return None, None, None, None
+
+        self.log('브라우저 시작 중...')
+        pw = sync_playwright().start()
+        browser = pw.chromium.launch(
+            headless=True,
+            channel='chrome',
+            args=['--disable-blink-features=AutomationControlled'],
+        )
+
+        context = browser.new_context(
+            user_agent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080},
+            locale='ko-KR',
+        )
+
+        page = context.new_page()
+        page.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
+
+        # 쿠키 주입
+        if cookie_str:
+            cookies = self._parse_cookies(cookie_str)
+            if cookies:
+                context.add_cookies(cookies)
+                self.log(f'쿠키 {len(cookies)}개 주입')
+
+            try:
+                page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=20000)
+                page.wait_for_timeout(2000)
+                self.log('쿠키 기반 세션 활성화 완료')
+            except Exception as e:
+                self.log(f'세션 활성화 경고: {str(e)[:80]}', 'warning')
+
+            return pw, browser, context, page
+
+    def _login_with_credentials(self, page, email: str, password: str) -> bool:
+        """Freepik 이메일/비밀번호 로그인"""
+        try:
+            self.log('Freepik 이메일 로그인 시도...')
+
+            # 로그인 페이지 이동
+            page.goto(
+                'https://www.freepik.com/log-in?client_id=freepik&lang=en',
+                wait_until='networkidle', timeout=20000
+            )
+            page.wait_for_timeout(2000)
+
+            # "Continue with email" 클릭
+            email_btn = page.get_by_text('Continue with email')
+            if email_btn.count() == 0:
+                self.log('Continue with email 버튼 없음', 'error')
+                return False
+            email_btn.click()
+            page.wait_for_timeout(2000)
+
+            # 이메일/비밀번호 입력
+            email_input = page.locator('input[name="email"]')
+            password_input = page.locator('input[name="password"]')
+
+            if email_input.count() == 0 or password_input.count() == 0:
+                self.log('이메일/비밀번호 입력란 없음', 'error')
+                return False
+
+            email_input.fill(email)
+            password_input.fill(password)
+
+            # "Stay logged in" 체크
+            keep_signed = page.locator('input[name="keep-signed"]')
+            if keep_signed.count() > 0 and not keep_signed.is_checked():
+                keep_signed.check()
+
+            # 로그인 버튼 클릭
+            login_btn = page.get_by_role('button', name='Log in')
+            if login_btn.count() == 0:
+                # fallback: 텍스트로 찾기
+                login_btn = page.locator('button:has-text("Log in")')
+            login_btn.click()
+
+            # 로그인 완료 대기 (URL 변경 또는 프로필 요소 등장)
+            page.wait_for_timeout(5000)
+
+            # 로그인 성공 확인: 로그인 페이지에서 벗어났는지
+            current_url = page.url
+            if 'log-in' in current_url:
+                # 아직 로그인 페이지 → 에러 메시지 확인
+                error_el = page.locator('[class*="error"], [class*="alert"], [role="alert"]')
+                if error_el.count() > 0:
+                    error_text = error_el.first.text_content().strip()[:100]
+                    self.log(f'로그인 실패: {error_text}', 'error')
+                else:
+                    self.log('로그인 실패: 이메일/비밀번호 확인 필요', 'error')
+                return False
+
+            self.log('Freepik 로그인 성공')
+
+            # kr.freepik.com으로 이동 (검색/다운로드용)
+            page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=20000)
+            page.wait_for_timeout(2000)
+
+            return True
+
+        except Exception as e:
+            self.log(f'로그인 오류: {str(e)[:100]}', 'error')
+            return False
+
+    def _parse_cookies(self, cookie_str: str) -> list:
+        """'name=value; name2=value2' 형식의 쿠키를 Playwright 형식으로 변환"""
+        cookies = []
+        for pair in cookie_str.split(';'):
+            pair = pair.strip()
+            if not pair or '=' not in pair:
+                continue
+            name, value = pair.split('=', 1)
+            name = name.strip()
+            value = value.strip()
+            if not name:
+                continue
+            cookies.append({
+                'name': name,
+                'value': value,
+                'domain': '.freepik.com',
+                'path': '/',
+            })
+        return cookies
+
+    # =============================================
+    # 씬 처리
+    # =============================================
+
+    def _process_scene(self, scene, page, used_ids: set) -> bool:
         """단일 씬 처리: 키워드 추출 → 검색 → 선택 → 다운로드"""
 
         # 1. LLM으로 키워드 2개 추출
@@ -115,11 +269,11 @@ class FreepikVideoService(BaseStepService):
 
         self.log(f'씬 {scene.scene_number} 키워드: {keywords}')
 
-        # 2. 키워드별 검색, 후보 수집 (무료만, 중복 제외)
+        # 2. 키워드별 검색, 후보 수집 (중복 제외)
         candidates = []
         seen_ids = set()
         for kw in keywords:
-            results = self._search_videos(kw, api_key, used_ids)
+            results = self._search_videos_browser(page, kw, used_ids)
             for v in results:
                 vid = str(v['id'])
                 if vid not in seen_ids:
@@ -130,8 +284,6 @@ class FreepikVideoService(BaseStepService):
             self.log(f'씬 {scene.scene_number} 검색 결과 없음', 'warning')
             return False
 
-        # LLM에 넘길 후보 수 제한
-        candidates = candidates[:self.MAX_CANDIDATES]
         self.log(f'씬 {scene.scene_number} 후보 {len(candidates)}개')
 
         # 3. LLM으로 최적 영상 선택
@@ -142,10 +294,19 @@ class FreepikVideoService(BaseStepService):
 
         self.log(f'씬 {scene.scene_number} 선택: ID={selected["id"]}, "{selected["name"]}"')
 
-        # 4. 다운로드
-        video_data = self._download_video(selected['id'], api_key)
+        # 4. 다운로드 (실패 시 다른 후보로 재시도)
+        video_data = self._download_video_browser(page, selected['id'])
         if not video_data:
-            return False
+            # 선택된 영상 제외하고 나머지 후보로 순차 시도
+            remaining = [c for c in candidates if c['id'] != selected['id']]
+            for fallback in remaining[:3]:
+                self.log(f'씬 {scene.scene_number} 대체 후보 시도: ID={fallback["id"]}, "{fallback["name"]}"')
+                video_data = self._download_video_browser(page, fallback['id'])
+                if video_data:
+                    selected = fallback
+                    break
+            if not video_data:
+                return False
 
         # 5. 저장
         video_id = str(selected['id'])
@@ -201,60 +362,72 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
             return []
 
     # =============================================
-    # 2. Freepik 검색
+    # 2. Playwright 브라우저 검색
     # =============================================
 
-    def _search_videos(self, keyword: str, api_key: str, used_ids: set) -> list:
-        """Freepik API로 영상 검색, 무료만 필터, 사용된 ID 제외"""
-        headers = {
-            'x-freepik-api-key': api_key,
-            'Accept': 'application/json',
-        }
+    def _search_videos_browser(self, page, keyword: str, used_ids: set) -> list:
+        """Playwright로 kr.freepik.com 검색 페이지 스크래핑 (2페이지)"""
+        encoded = quote_plus(keyword)
+        all_videos = []
 
-        params = {
-            'term': keyword,
-        }
+        for pg in range(1, 3):  # 1페이지, 2페이지
+            url = f'https://kr.freepik.com/search?format=search&orientation=landscape&page={pg}&query={encoded}&type=video'
 
-        for attempt in range(self.MAX_RETRIES):
             try:
-                resp = requests.get(
-                    f'{self.FREEPIK_API_BASE}/videos',
-                    headers=headers,
-                    params=params,
-                    timeout=15
-                )
+                page.goto(url, wait_until='networkidle', timeout=20000)
+                page.wait_for_timeout(2000)
 
-                if resp.status_code == 429:
-                    wait = 2 * (attempt + 1)
-                    self.log(f'API 429 - {wait}초 대기', 'warning')
-                    time.sleep(wait)
-                    continue
+                videos = page.evaluate('''(usedIds) => {
+                    const results = [];
+                    const figures = document.querySelectorAll('figure');
+                    for (const fig of figures) {
+                        const link = fig.parentElement;
+                        if (!link || link.tagName !== 'A') continue;
+                        const href = link.href || '';
 
-                resp.raise_for_status()
-                data = resp.json()
+                        const idMatch = href.match(/_(\\d+)(?:#|$)/);
+                        if (!idMatch) continue;
+                        const videoId = idMatch[1];
 
-                videos = data.get('data', [])
-                results = []
-                for v in videos:
-                    vid = str(v.get('id', ''))
-                    if not vid or vid in used_ids:
-                        continue
-                    results.append({
-                        'id': vid,
-                        'name': v.get('name', ''),
-                        'duration': v.get('duration', ''),
-                        'quality': v.get('quality', ''),
-                    })
+                        if (usedIds.includes(videoId)) continue;
 
-                return results
+                        // 세로 영상 제외 (poster/src URL에 vertical 포함)
+                        const vid = fig.querySelector('video');
+                        const poster = vid ? (vid.poster || '') : '';
+                        const src = vid ? (vid.querySelector('source')?.getAttribute('data-src') || '') : '';
+                        if (poster.includes('/vertical/') || src.includes('/vertical/')) continue;
+
+                        const img = fig.querySelector('img');
+                        const name = img ? (img.alt || '') : '';
+
+                        const header = fig.querySelector('header');
+                        const durationDiv = header ? header.querySelector('div') : null;
+                        const duration = durationDiv ? durationDiv.textContent.trim() : '';
+
+                        results.push({
+                            id: videoId,
+                            name: name.substring(0, 100),
+                            duration: duration,
+                        });
+                    }
+                    return results;
+                }''', list(used_ids))
+
+                all_videos.extend(videos)
+
+                if not videos:
+                    break  # 결과 없으면 다음 페이지 스킵
 
             except Exception as e:
-                self.log(f'검색 오류 ({keyword}): {str(e)[:80]}', 'error')
-                if attempt < self.MAX_RETRIES - 1:
-                    time.sleep(1)
-                    continue
+                self.log(f'검색 오류 ({keyword} p{pg}): {str(e)[:80]}', 'error')
+                break
 
-        return []
+        if all_videos:
+            self.log(f'검색 "{keyword}": {len(all_videos)}개 결과')
+        else:
+            self.log(f'검색 "{keyword}": 결과 없음', 'warning')
+
+        return all_videos
 
     # =============================================
     # 3. LLM 영상 선택
@@ -296,66 +469,72 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
         return None
 
     # =============================================
-    # 4. 다운로드
+    # 4. 브라우저 다운로드
     # =============================================
 
-    def _download_video(self, video_id: str, api_key: str) -> bytes:
-        """Freepik 영상 다운로드 (웹사이트 쿠키만 사용)"""
-        cookie = self.get_freepik_cookie()
+    def _download_video_browser(self, page, video_id: str) -> bytes:
+        """브라우저 컨텍스트에서 fetch()로 다운로드 (Firebase 토큰 자동 갱신)"""
         wallet_id = self.get_freepik_wallet()
-        if not cookie or not wallet_id:
-            self.log('Freepik 쿠키 또는 walletId 미설정 - 설정에서 추가하세요', 'error')
+        if not wallet_id:
+            self.log('Freepik walletId 미설정', 'error')
             return None
-
-        result = self._download_via_website(video_id, cookie, wallet_id)
-        if not result:
-            self.log('웹사이트 다운로드 실패 - 쿠키 만료 여부 확인하세요', 'error')
-        return result
-
-    def _download_via_website(self, video_id: str, cookie: str, wallet_id: str) -> bytes:
-        """Freepik 웹사이트 쿠키로 무료 다운로드 (프리미엄 구독 활용)"""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Cookie': cookie,
-            'Referer': 'https://kr.freepik.com/',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-        }
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                url = f'https://kr.freepik.com/api/video/{video_id}/download?walletId={wallet_id}'
-                resp = requests.get(url, headers=headers, timeout=15)
+                # 브라우저 내에서 fetch() 호출 - 쿠키/인증 자동 포함
+                result = page.evaluate('''async ({videoId, walletId}) => {
+                    try {
+                        const resp = await fetch(
+                            `/api/video/${videoId}/download?walletId=${walletId}`,
+                            {credentials: 'include'}
+                        );
+                        if (!resp.ok) {
+                            return {error: resp.status, message: resp.statusText};
+                        }
+                        const data = await resp.json();
+                        return {url: data.url, filename: data.filename || ''};
+                    } catch (e) {
+                        return {error: -1, message: e.message};
+                    }
+                }''', {'videoId': video_id, 'walletId': wallet_id})
 
-                if resp.status_code in (401, 403):
-                    self.log(f'웹사이트 다운로드 {resp.status_code} (쿠키 만료?) - 설정에서 쿠키 갱신 필요', 'warning')
+                if result.get('error'):
+                    error_code = result['error']
+                    error_msg = result.get('message', '')
+                    self.log(f'다운로드 API 오류 {error_code}: {error_msg} (시도 {attempt + 1})', 'warning')
+
+                    if error_code in (401, 403):
+                        # 토큰 만료 → 페이지 새로고침으로 Firebase 토큰 갱신
+                        self.log('토큰 만료 추정 - 페이지 새로고침으로 갱신 시도', 'warning')
+                        page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=15000)
+                        page.wait_for_timeout(3000)
+                        continue
+
+                    if error_code == 429:
+                        wait = 3 * (attempt + 1)
+                        self.log(f'429 Rate limit - {wait}초 대기', 'warning')
+                        time.sleep(wait)
+                        continue
+
+                    if attempt < self.MAX_RETRIES - 1:
+                        time.sleep(2)
+                        continue
                     return None
 
-                if resp.status_code == 429:
-                    wait = 3 * (attempt + 1)
-                    self.log(f'웹사이트 429 - {wait}초 대기', 'warning')
-                    time.sleep(wait)
-                    continue
-
-                resp.raise_for_status()
-                download_info = resp.json()
-
-                download_url = download_info.get('url')
-                filename = download_info.get('filename', '')
+                download_url = result.get('url')
+                filename = result.get('filename', '')
                 if not download_url:
-                    self.log(f'웹사이트 다운로드 URL 없음', 'warning')
+                    self.log('다운로드 URL 없음', 'warning')
                     return None
 
-                self.log(f'웹사이트 다운로드 시작: {filename}')
+                self.log(f'다운로드 시작: {filename}')
 
-                # 파일 다운로드
+                # CDN URL은 인증 불필요 - requests로 직접 다운로드
                 file_resp = requests.get(download_url, timeout=180)
                 file_resp.raise_for_status()
                 raw_data = file_resp.content
                 raw_mb = len(raw_data) / 1024 / 1024
-                self.log(f'웹사이트 다운로드 완료: {raw_mb:.1f}MB (무료)')
+                self.log(f'다운로드 완료: {raw_mb:.1f}MB')
 
                 # .mov면 H.264 변환, .mp4면 그대로
                 if filename.lower().endswith('.mov') or raw_mb > 50:
@@ -363,12 +542,16 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                 return raw_data
 
             except Exception as e:
-                self.log(f'웹사이트 다운로드 오류 (시도 {attempt + 1}): {str(e)[:80]}', 'error')
+                self.log(f'다운로드 오류 (시도 {attempt + 1}): {str(e)[:80]}', 'error')
                 if attempt < self.MAX_RETRIES - 1:
                     time.sleep(2)
                     continue
 
         return None
+
+    # =============================================
+    # 5. 파일 변환
+    # =============================================
 
     def _convert_to_h264(self, raw_data: bytes) -> bytes:
         """ffmpeg로 H.264 1080p MP4 변환"""

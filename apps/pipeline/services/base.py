@@ -173,6 +173,20 @@ class BaseStepService(ABC):
         except APIKey.DoesNotExist:
             raise ValueError('Freepik API 키가 설정되지 않았습니다. 설정에서 API 키를 추가해주세요.')
 
+    def get_freepik_email(self) -> str:
+        """사용자의 Freepik 이메일 가져오기"""
+        api_key = self.user.api_keys.filter(service='freepik_email').first()
+        if not api_key:
+            return ''
+        return api_key.get_key()
+
+    def get_freepik_password(self) -> str:
+        """사용자의 Freepik 비밀번호 가져오기"""
+        api_key = self.user.api_keys.filter(service='freepik_password').first()
+        if not api_key:
+            return ''
+        return api_key.get_key()
+
     def get_freepik_cookie(self) -> str:
         """사용자의 Freepik 웹사이트 쿠키 가져오기"""
         api_key = self.user.api_keys.filter(service='freepik_cookie').first()

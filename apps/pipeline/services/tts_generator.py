@@ -169,8 +169,8 @@ class TTSGeneratorService(BaseStepService):
             duration = end - start
             word = timing['text']
 
-            # 2글자 이상 단어인데 duration이 0.15초 미만이면 잘림 의심
-            if len(word) >= 2 and duration < 0.15:
+            # 2글자 이상 단어인데 duration이 0.10초 미만이면 잘림 의심
+            if len(word) >= 2 and duration < 0.10:
                 truncated_words.append(f'{word}({duration:.3f}s)')
 
         if truncated_words:

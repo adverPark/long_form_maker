@@ -54,6 +54,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         total = len(scenes)
         self.log(f'총 {total}개 씬 로드')
 
+        # 이미지/영상 누락 씬 체크
+        missing_visual = []
+        for scene in scenes:
+            if scene.audio and not scene.image and not scene.video and not scene.stock_video:
+                missing_visual.append(scene.scene_number)
+        if missing_visual:
+            raise ValueError(f'이미지/영상이 없는 씬이 있습니다: {missing_visual}')
+
         # 음성 프리셋 확인
         voice = self.project.voice
         if voice:
@@ -466,8 +474,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # 최종 합치기
     # ===========================================
 
+    def _validate_video(self, video_path) -> bool:
+        """ffprobe로 영상 파일 무결성 검증"""
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', str(video_path)],
+                capture_output=True, text=True, timeout=30
+            )
+            return len(result.stderr.strip()) == 0
+        except:
+            return False
+
     def _concat_clips(self, scenes: list):
-        """클립들을 하나로 합치기"""
+        """클립들을 하나로 합치기 (검증 + 자동 재시도)"""
         clips_dir = Path(settings.MEDIA_ROOT) / 'temp_clips'
 
         # concat 리스트 파일 생성 (scene 순서대로!)
@@ -500,31 +519,52 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             str(output_path)
         ]
 
-        try:
-            self.log(f'FFmpeg concat 실행 중... ({clip_count}개 클립)')
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.log(f'FFmpeg concat 실행 중... ({clip_count}개 클립, 시도 {attempt}/{max_attempts})')
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
-            if result.returncode != 0:
-                self.log(f'FFmpeg concat 실패: {result.stderr[-500:] if result.stderr else "unknown error"}', 'error')
+                if result.returncode != 0:
+                    self.log(f'FFmpeg concat 실패: {result.stderr[-500:] if result.stderr else "unknown error"}', 'error')
+                    if attempt < max_attempts:
+                        continue
+                    return
+
+                if not output_path.exists():
+                    self.log(f'출력 파일 생성 안됨: {output_path}', 'error')
+                    if attempt < max_attempts:
+                        continue
+                    return
+
+                # 무결성 검증
+                if not self._validate_video(output_path):
+                    self.log(f'최종 영상 무결성 검증 실패 (시도 {attempt}/{max_attempts})', 'error')
+                    if attempt < max_attempts:
+                        output_path.unlink(missing_ok=True)
+                        continue
+                    return
+
+                # 프로젝트에 저장
+                file_size = output_path.stat().st_size
+                self.log(f'최종 영상 파일 크기: {file_size / 1024 / 1024:.1f}MB')
+
+                with open(output_path, 'rb') as f:
+                    self.project.final_video.save('final.mp4', ContentFile(f.read()), save=True)
+
+                self.log(f'최종 영상 생성 완료 ({clip_count}개 클립)')
                 return
 
-            if not output_path.exists():
-                self.log(f'출력 파일 생성 안됨: {output_path}', 'error')
+            except subprocess.TimeoutExpired:
+                self.log(f'FFmpeg concat 타임아웃 (600초 초과)', 'error')
+                if attempt < max_attempts:
+                    continue
                 return
-
-            # 프로젝트에 저장
-            file_size = output_path.stat().st_size
-            self.log(f'최종 영상 파일 크기: {file_size / 1024 / 1024:.1f}MB')
-
-            with open(output_path, 'rb') as f:
-                self.project.final_video.save('final.mp4', ContentFile(f.read()), save=True)
-
-            self.log(f'최종 영상 생성 완료 ({clip_count}개 클립)')
-
-        except subprocess.TimeoutExpired:
-            self.log(f'FFmpeg concat 타임아웃 (600초 초과)', 'error')
-        except Exception as e:
-            self.log(f'최종 영상 합성 실패: {type(e).__name__}: {str(e)[:100]}', 'error')
+            except Exception as e:
+                self.log(f'최종 영상 합성 실패: {type(e).__name__}: {str(e)[:100]}', 'error')
+                if attempt < max_attempts:
+                    continue
+                return
 
     def _merge_full_subtitles(self, scenes: list):
         """전체 자막 SRT 파일 생성 (YouTube 업로드용)"""

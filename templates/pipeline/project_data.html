@@ -1166,7 +1166,7 @@
                         <label class="form-label fw-bold">태그 (쉼표로 구분)</label>
                         <input type="text" class="form-control" id="upload-tags"
                             value="{{ project.upload_info.get_tags_string|default:'' }}"
-                            placeholder="경제, 자영업, 재테크, ...">
+                            placeholder="태그1, 태그2, 태그3, ...">
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">타임라인</label>
@@ -2490,7 +2490,7 @@ async function convertAllTtsAI() {
                 {% csrf_token %}
                 <div class="modal-body">
                     {% if topic.video_id %}
-                    <p class="text-muted small"><span class="badge bg-danger me-1"><i class="bi bi-youtube"></i></span>YouTube 수집 → 자막분석 → 댓글분석 → 대본계획 → 리서치 → 대본 → 씬분할 → TTS → 이미지 → 영상생성 → 영상조립까지 자동 실행됩니다.</p>
+                    <p class="text-muted small"><span class="badge bg-danger me-1"><i class="bi bi-youtube"></i></span>YouTube 수집 → 자막분석 → 댓글분석 → 대본계획 → 리서치 → 대본 → 씬분할 → (TTS | 스톡영상 | 이미지) 병렬 → 영상조립</p>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">자막 분석</label>
@@ -2522,7 +2522,7 @@ async function convertAllTtsAI() {
                         </select>
                     </div>
                     {% else %}
-                    <p class="text-muted small">리서치 → 대본 → 씬분할 → TTS → 이미지 프롬프트 → 이미지 → 영상생성 → 영상조립까지 자동 실행됩니다.</p>
+                    <p class="text-muted small">리서치 → 대본 → 씬분할 → (TTS | 스톡영상 | 이미지) 병렬 → 영상조립</p>
                     {% endif %}
 
                     <div class="mb-3">
@@ -2547,13 +2547,26 @@ async function convertAllTtsAI() {
 
                     <p class="text-muted small mb-2"><i class="bi bi-info-circle"></i> 씬 분할은 규칙 기반으로 동작 (모델 불필요)</p>
 
+                    <hr class="my-2">
+                    <p class="text-muted small mb-2"><i class="bi bi-arrows-expand"></i> 아래 3개는 씬 분할 후 <strong>병렬</strong> 실행됩니다</p>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">TTS 변환</label>
+                        <select name="model_tts_converter" class="form-select form-select-sm">
+                            <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
+                            <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
+                            <option value="flash" selected>3 Flash ($0.10/$0.40)</option>
+                            <option value="pro">3 Pro ($1.00/$4.00)</option>
+                        </select>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label fw-bold">이미지 프롬프트</label>
                         <select name="model_image_prompter" class="form-select form-select-sm">
                             <option value="2.5-flash">2.5 Flash ($0.30/$2.50)</option>
                             <option value="2.5-pro">2.5 Pro ($1.25/$10.00)</option>
-                            <option value="flash" selected>3 Flash ($0.50/$3.00)</option>
-                            <option value="pro">3 Pro ($2.00/$12.00)</option>
+                            <option value="flash" selected>3 Flash ($0.10/$0.40)</option>
+                            <option value="pro">3 Pro ($1.00/$4.00)</option>
                         </select>
                     </div>
                 </div>

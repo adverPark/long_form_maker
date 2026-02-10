@@ -17,4 +17,5 @@ dependencies = [
     "requests>=2.31.0",
     "whitenoise>=6.11.0",
     "yt-dlp>=2024.0.0",
+    "playwright>=1.40.0",
 ]

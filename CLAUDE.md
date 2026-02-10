@@ -115,6 +115,13 @@ Django에서 TTS 호출 전 특수문자 제거 (Fish Speech 호환성):
 - 위치: `apps/pipeline/services/tts_generator.py` (`_preprocess_for_tts`)
 - 위치: `apps/pipeline/views.py` (`scene_generate_tts`)
 
+### Freepik 스톡 영상
+- **공식 API 다운로드 사용 금지** - 영상 1개당 ~130원, 영상 50개면 5000원+ (너무 비쌈)
+- 현재 방식: 프리미엄 구독 + 웹사이트 쿠키로 무료 다운로드 (쿠키 기반 우회)
+- 쿠키 핵심: `GR_TOKEN` (Firebase JWT, ~1시간 만료), `GR_REFRESH` (갱신용)
+- 파일: `apps/pipeline/services/freepik_video.py`
+- 설정: 사용자 설정 페이지에서 `freepik_cookie`, `freepik_wallet` 저장
+
 ### 기타 서비스 (이 서버)
 - advercoder_ai: 8080 포트 (/home/adver/projects/mysite)
 

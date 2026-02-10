@@ -49,6 +49,8 @@ class APIKey(models.Model):
         ('freepik', 'Freepik'),
         ('freepik_cookie', 'Freepik 쿠키'),
         ('freepik_wallet', 'Freepik Wallet ID'),
+        ('freepik_email', 'Freepik 이메일'),
+        ('freepik_password', 'Freepik 비밀번호'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_keys')

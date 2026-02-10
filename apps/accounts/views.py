@@ -45,6 +45,8 @@ def settings_view(request):
     freepik_keys = api_keys.filter(service='freepik')
     freepik_cookie_key = api_keys.filter(service='freepik_cookie').first()
     freepik_wallet_key = api_keys.filter(service='freepik_wallet').first()
+    freepik_email_key = api_keys.filter(service='freepik_email').first()
+    freepik_password_key = api_keys.filter(service='freepik_password').first()
 
     # 프리셋들
     image_styles = ImageStylePreset.objects.filter(user=request.user)
@@ -58,6 +60,8 @@ def settings_view(request):
         'freepik_keys': freepik_keys,
         'freepik_cookie_key': freepik_cookie_key,
         'freepik_wallet_key': freepik_wallet_key,
+        'freepik_email_key': freepik_email_key,
+        'freepik_password_key': freepik_password_key,
         'services': APIKey.SERVICE_CHOICES,
         'gemini_model_choices': User.GEMINI_MODEL_CHOICES,
         'current_gemini_model': request.user.gemini_model,
@@ -83,8 +87,8 @@ def save_api_key(request):
         messages.error(request, '모든 필드를 입력해주세요.')
         return redirect('accounts:settings')
 
-    # freepik_cookie, freepik_wallet은 항상 1개만 유지 (덮어쓰기)
-    if service in ('freepik_cookie', 'freepik_wallet'):
+    # freepik_cookie, freepik_wallet, freepik_email, freepik_password는 항상 1개만 유지 (덮어쓰기)
+    if service in ('freepik_cookie', 'freepik_wallet', 'freepik_email', 'freepik_password'):
         existing = APIKey.objects.filter(user=request.user, service=service).first()
         if existing:
             existing.set_key(api_key_value)
@@ -459,7 +463,7 @@ def add_thumbnail_style(request):
 
     if not prompt_template:
         # 기본 템플릿
-        prompt_template = """YouTube thumbnail for Korean economy video.
+        prompt_template = """YouTube thumbnail for Korean video.
 
 Main visual: {main_keyword} related scene
 Korean text: '{title}' (large, bold, contrasting color)

@@ -4,9 +4,9 @@ from apps.prompts.models import AgentPrompt
 
 # 에이전트별 기본 프롬프트
 DEFAULT_PROMPTS = {
-    'script_writer': '''# 경제 유튜브 대본 작가
+    'script_writer': '''# 유튜브 대본 작가
 
-당신은 시청자가 끝까지 보게 만드는 경제 유튜브 대본을 작성합니다.
+당신은 시청자가 끝까지 보게 만드는 유튜브 대본을 작성합니다.
 
 ## 절대 규칙
 

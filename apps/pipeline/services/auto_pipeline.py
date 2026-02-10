@@ -2,22 +2,17 @@
 
 주제 입력 후 전체 파이프라인 자동 실행:
 
-YouTube URL 있는 경우:
-1. YouTube 수집 (youtube_collector)
-2. 자막 분석 (transcript_analyzer)
-3. 댓글 분석 (comment_analyzer)
-4. 대본 계획 (script_planner)
-5. 리서치 (researcher)
-6. 대본 작성 (script_writer)
-7. 씬 분할 (scene_planner) - 규칙 기반, 모델 불필요
-8. TTS 생성 (tts_generator)
-9. 이미지 프롬프트 (image_prompter)
-10. 이미지 생성 (scene_generator)
-11. 영상 생성 (video_generator)
-12. 영상 조립 (video_composer)
+Phase 1 - 순차 실행:
+  (YouTube) YouTube 수집 → 자막 분석 → 댓글 분석 → 대본 계획
+  리서치 → 대본 작성 → 씬 분할
 
-YouTube URL 없는 경우:
-5~12만 실행 (리서치부터)
+Phase 2 - 병렬 실행 (씬 분할 완료 후):
+  ├─ 트랙A: TTS 변환 → TTS 생성
+  ├─ 트랙B: 스톡 영상
+  └─ 트랙C: 이미지 프롬프트 → 이미지 생성
+
+Phase 3 - 순차 실행 (병렬 완료 후):
+  영상 조립
 """
 
 import threading
@@ -44,52 +39,68 @@ class AutoPipelineService(BaseStepService):
     MAX_RETRIES = 3
     RETRY_DELAY = 30  # 초
 
-    # 실행할 단계들 (순서대로) - 모델은 get_pipeline_steps()에서 동적으로 설정
-    # YouTube URL이 있으면 youtube_collector → transcript_analyzer → comment_analyzer → script_planner → ...
-    # 없으면 기존대로 researcher부터 시작
-    DEFAULT_PIPELINE_STEPS = [
+    # Phase 1: 순차 실행
+    SEQUENTIAL_STEPS = [
         {'name': 'youtube_collector', 'default_model': None, 'display': 'YouTube 수집', 'requires_youtube': True},
         {'name': 'transcript_analyzer', 'default_model': '2.5-flash', 'display': '자막 분석', 'requires_youtube': True},
         {'name': 'comment_analyzer', 'default_model': '2.5-flash', 'display': '댓글 분석', 'requires_youtube': True},
         {'name': 'script_planner', 'default_model': '2.5-flash', 'display': '대본 계획', 'requires_youtube': True},
         {'name': 'researcher', 'default_model': '2.5-flash', 'display': '리서치'},
         {'name': 'script_writer', 'default_model': '2.5-pro', 'display': '대본 작성'},
-        {'name': 'scene_planner', 'default_model': None, 'display': '씬 분할'},  # 규칙 기반, 모델 불필요
-        {'name': 'tts_converter', 'default_model': '2.5-flash', 'display': 'TTS 변환'},  # narration → narration_tts
-        {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성'},
-        {'name': 'freepik_video', 'default_model': None, 'display': '스톡 영상'},
-        {'name': 'image_prompter', 'default_model': '2.5-flash', 'display': '이미지 프롬프트'},
-        {'name': 'scene_generator', 'default_model': None, 'display': '이미지 생성'},
-        {'name': 'video_generator', 'default_model': None, 'display': '영상 생성'},
+        {'name': 'scene_planner', 'default_model': None, 'display': '씬 분할'},
+    ]
+
+    # Phase 2: 병렬 실행 (씬 분할 완료 후, 트랙별 내부는 순차)
+    PARALLEL_TRACKS = [
+        # 트랙A: TTS
+        [
+            {'name': 'tts_converter', 'default_model': 'flash', 'display': 'TTS 변환'},
+            {'name': 'tts_generator', 'default_model': None, 'display': 'TTS 생성'},
+        ],
+        # 트랙B: 스톡 영상
+        [
+            {'name': 'freepik_video', 'default_model': None, 'display': '스톡 영상'},
+        ],
+        # 트랙C: 이미지
+        [
+            {'name': 'image_prompter', 'default_model': 'flash', 'display': '이미지 프롬프트'},
+            {'name': 'scene_generator', 'default_model': None, 'display': '이미지 생성'},
+        ],
+    ]
+
+    TRACK_NAMES = ['TTS', '스톡영상', '이미지']
+
+    # Phase 3: 최종 (병렬 완료 후)
+    FINAL_STEPS = [
         {'name': 'video_composer', 'default_model': None, 'display': '영상 조립'},
     ]
 
     def get_pipeline_steps(self):
-        """모델 설정이 적용된 파이프라인 단계 반환"""
-        # intermediate_data에서 모델 설정 가져오기
+        """모델 설정이 적용된 파이프라인 단계 반환 (순차/병렬/최종)"""
         model_settings = {}
         if self.execution.intermediate_data:
             model_settings = self.execution.intermediate_data.get('model_settings', {})
 
-        # YouTube URL 있는지 확인
         has_youtube = False
         if hasattr(self.project, 'topic') and self.project.topic:
             url = self.project.topic.url or ''
             has_youtube = 'youtube.com' in url or 'youtu.be' in url
 
-        steps = []
-        for step in self.DEFAULT_PIPELINE_STEPS:
-            # requires_youtube=True인데 YouTube URL이 없으면 건너뜀
-            if step.get('requires_youtube') and not has_youtube:
-                continue
+        def apply_settings(steps):
+            result = []
+            for step in steps:
+                if step.get('requires_youtube') and not has_youtube:
+                    continue
+                step_copy = step.copy()
+                step_copy['model'] = model_settings.get(step['name'], step['default_model'])
+                result.append(step_copy)
+            return result
 
-            step_copy = step.copy()
-            step_name = step['name']
-            # 모델 설정이 있으면 사용, 없으면 기본값
-            step_copy['model'] = model_settings.get(step_name, step['default_model'])
-            steps.append(step_copy)
-
-        return steps
+        return {
+            'sequential': apply_settings(self.SEQUENTIAL_STEPS),
+            'parallel': [apply_settings(track) for track in self.PARALLEL_TRACKS],
+            'final': apply_settings(self.FINAL_STEPS),
+        }
 
     def execute(self):
         global _running_count
@@ -116,7 +127,7 @@ class AutoPipelineService(BaseStepService):
             self.log(f'파이프라인 종료 (남은 실행: {_running_count}개)')
 
     def _execute_pipeline(self):
-        """실제 파이프라인 실행 로직"""
+        """실제 파이프라인 실행 로직 (순차 → 병렬 → 최종)"""
         # 같은 프로젝트에서 이미 실행 중인 자동 파이프라인이 있으면 취소
         running_auto = self.project.step_executions.filter(
             step__name='auto_pipeline',
@@ -129,7 +140,7 @@ class AutoPipelineService(BaseStepService):
             running_auto.update(status='cancelled', progress_message='새 파이프라인으로 대체됨')
 
         # 파이프라인 단계 가져오기 (모델 설정 적용)
-        pipeline_steps = self.get_pipeline_steps()
+        pipeline = self.get_pipeline_steps()
 
         # 선택된 모델 로깅
         model_settings = self.execution.intermediate_data.get('model_settings', {}) if self.execution.intermediate_data else {}
@@ -138,14 +149,16 @@ class AutoPipelineService(BaseStepService):
 
         # 이미 있는 데이터 확인 (DB 직접 쿼리 - ORM 캐시로 인한 stale 데이터 방지)
         from apps.pipeline.models import Research, Draft
-        has_research = Research.objects.filter(project=self.project).exists()
+        has_research = Research.objects.filter(
+            project=self.project
+        ).exclude(sources__in=[None, []]).exists()
         has_draft = Draft.objects.filter(project=self.project).exists()
         has_scenes = self.project.scenes.exists()
 
         skip_steps = set()
         if has_research:
             skip_steps.add('researcher')
-            self.log('리서치 있음 - 건너뜀')
+            self.log('리서치 결과 있음 - 건너뜀')
         if has_draft:
             skip_steps.add('script_writer')
             self.log('대본 있음 - 건너뜀')
@@ -153,64 +166,21 @@ class AutoPipelineService(BaseStepService):
             skip_steps.add('scene_planner')
             self.log(f'씬 {self.project.scenes.count()}개 있음 - 씬분할 건너뜀')
 
-        # 실행할 단계만 카운트 (백그라운드 제외)
-        steps_to_run = [s for s in pipeline_steps
-                        if s['name'] not in skip_steps and not s.get('background')]
-        total_steps = len(steps_to_run)
+        # === Phase 1: 순차 실행 ===
+        sequential_steps = [s for s in pipeline['sequential'] if s['name'] not in skip_steps]
+        total_seq = len(sequential_steps)
 
-        if total_steps == 0:
-            self.log('모든 단계가 이미 완료됨')
-            return
-
-        current_step = 0
-        background_threads = []  # 백그라운드 작업 추적
-
-        for step_config in pipeline_steps:
+        for i, step_config in enumerate(sequential_steps):
             step_name = step_config['name']
             model_type = step_config['model']
             display_name = step_config['display']
 
-            # 이미 데이터 있으면 건너뜀
-            if step_name in skip_steps:
-                continue
+            progress = int((i / max(total_seq, 1)) * 50)
+            self.update_progress(progress, f'{display_name} 시작...')
+            self.log(f'[{i + 1}/{total_seq}] {display_name} 시작')
 
-            # 백그라운드 실행
-            if step_config.get('background'):
-                self.log(f'{display_name} 백그라운드 시작')
-                bg_thread = threading.Thread(
-                    target=self._run_step_background,
-                    args=(step_name, model_type, display_name)
-                )
-                bg_thread.start()
-                background_threads.append((bg_thread, display_name))
-                continue
-
-            current_step += 1
-            base_progress = int((current_step - 1) / total_steps * 100)
-            self.update_progress(base_progress, f'{display_name} 시작...')
-            self.log(f'[{current_step}/{total_steps}] {display_name} 시작')
-
-            # 재시도 로직
-            success = False
-            last_error = ''
-
-            for attempt in range(self.MAX_RETRIES):
-                if attempt > 0:
-                    wait_time = self.RETRY_DELAY * attempt
-                    self.log(f'{display_name} 재시도 {attempt + 1}/{self.MAX_RETRIES} - 이전 오류: {last_error[:100]}', 'warning')
-                    self.update_progress(base_progress, f'{display_name} 재시도 {attempt + 1}/{self.MAX_RETRIES} ({wait_time}초 대기)')
-                    time.sleep(wait_time)
-
-                try:
-                    success, last_error = self._run_step(step_name, model_type)
-                    if success:
-                        break
-                except Exception as e:
-                    last_error = str(e)
-                    self.log(f'{display_name} 예외 발생: {last_error}', 'error')
-
+            success, last_error = self._run_step_with_retry(step_name, model_type, display_name)
             if not success:
-                self.log(f'{display_name} 최종 실패 (재시도 {self.MAX_RETRIES}회): {last_error}', 'error')
                 raise Exception(f'{display_name} 실패: {last_error}')
 
             self.log(f'{display_name} 완료')
@@ -221,19 +191,102 @@ class AutoPipelineService(BaseStepService):
                 scenes_without_narration = self.project.scenes.filter(narration='').count()
                 total_scenes = self.project.scenes.count()
                 if scenes_without_narration > 0:
-                    self.log(f'⚠️ 나레이션 없는 씬: {scenes_without_narration}/{total_scenes}개', 'error')
+                    self.log(f'나레이션 없는 씬: {scenes_without_narration}/{total_scenes}개', 'warning')
                     if scenes_without_narration == total_scenes:
                         raise Exception('모든 씬의 나레이션이 비어있습니다. 씬 분할 결과를 확인해주세요.')
 
-        # 백그라운드 작업 완료 대기
-        for bg_thread, display_name in background_threads:
-            if bg_thread.is_alive():
-                self.log(f'{display_name} 완료 대기 중...')
-                bg_thread.join()
-                self.log(f'{display_name} 완료')
+        # === Phase 2: 병렬 실행 ===
+        self.update_progress(50, '병렬 처리 시작 (TTS | 스톡영상 | 이미지)...')
+        self.log('병렬 실행 시작: TTS | 스톡영상 | 이미지')
+
+        track_errors = {}
+        threads = []
+
+        for i, track in enumerate(pipeline['parallel']):
+            if not track:  # 빈 트랙 건너뜀
+                continue
+            track_name = self.TRACK_NAMES[i]
+            t = threading.Thread(
+                target=self._run_track,
+                args=(track, track_name, track_errors)
+            )
+            threads.append((t, track_name))
+            t.start()
+
+        for t, track_name in threads:
+            t.join()
+            if track_name not in track_errors:
+                self.log(f'[{track_name}] 트랙 완료')
+
+        if track_errors:
+            error_msgs = [f'{name}: {err}' for name, err in track_errors.items()]
+            raise Exception(f'병렬 실행 실패 - {"; ".join(error_msgs)}')
+
+        self.update_progress(85, '병렬 처리 완료')
+        self.log('병렬 실행 모두 완료')
+
+        # === Phase 3: 최종 ===
+        for step_config in pipeline['final']:
+            step_name = step_config['name']
+            model_type = step_config['model']
+            display_name = step_config['display']
+
+            self.update_progress(88, f'{display_name} 시작...')
+            self.log(f'{display_name} 시작')
+
+            success, last_error = self._run_step_with_retry(step_name, model_type, display_name)
+            if not success:
+                raise Exception(f'{display_name} 실패: {last_error}')
+
+            self.log(f'{display_name} 완료')
 
         self.log('자동 파이프라인 완료!', 'result')
         self.update_progress(100, '전체 완료!')
+
+    def _run_step_with_retry(self, step_name, model_type, display_name):
+        """단계 실행 + 재시도 (최대 MAX_RETRIES회)
+
+        Returns:
+            tuple: (success: bool, last_error: str)
+        """
+        last_error = ''
+        for attempt in range(self.MAX_RETRIES):
+            if attempt > 0:
+                wait_time = self.RETRY_DELAY * attempt
+                self.log(f'{display_name} 재시도 {attempt + 1}/{self.MAX_RETRIES} - 이전 오류: {last_error[:100]}', 'warning')
+                time.sleep(wait_time)
+            try:
+                success, last_error = self._run_step(step_name, model_type)
+                if success:
+                    return True, ''
+            except Exception as e:
+                last_error = str(e)
+                self.log(f'{display_name} 예외: {last_error}', 'error')
+
+        self.log(f'{display_name} 최종 실패 (재시도 {self.MAX_RETRIES}회): {last_error}', 'error')
+        return False, last_error
+
+    def _run_track(self, track_steps, track_name, errors_dict):
+        """병렬 트랙 실행 (트랙 내 단계는 순차 실행)"""
+        try:
+            for step_config in track_steps:
+                step_name = step_config['name']
+                model_type = step_config['model']
+                display_name = step_config['display']
+
+                self.log(f'[{track_name}] {display_name} 시작')
+
+                success, last_error = self._run_step_with_retry(
+                    step_name, model_type, f'[{track_name}] {display_name}'
+                )
+
+                if not success:
+                    errors_dict[track_name] = f'{display_name}: {last_error}'
+                    return
+
+                self.log(f'[{track_name}] {display_name} 완료')
+        finally:
+            close_old_connections()
 
     def _run_step(self, step_name: str, model_type: str = None) -> tuple:
         """단일 단계 실행 (완료까지 대기)
@@ -354,64 +407,3 @@ class AutoPipelineService(BaseStepService):
             self.log(f'{step_name} 예외: {error}', 'error')
             return False, error
 
-    def _run_step_background(self, step_name: str, model_type: str, display_name: str):
-        """백그라운드로 단계 실행 (완료 안 기다림)"""
-        try:
-            for attempt in range(self.MAX_RETRIES):
-                if attempt > 0:
-                    wait_time = self.RETRY_DELAY * attempt
-                    self.log(f'{display_name} 재시도 {attempt + 1}/{self.MAX_RETRIES}', 'warning')
-                    time.sleep(wait_time)
-
-                success, error = self._run_step(step_name, model_type)
-                if success:
-                    return
-                else:
-                    self.log(f'{display_name} 실패: {error[:100]}', 'error')
-
-            self.log(f'{display_name} 최종 실패', 'error')
-        finally:
-            # 스레드 종료 시 DB 연결 정리
-            close_old_connections()
-
-    def _run_parallel_steps(self, step1_name: str, step2_name: str, model_type: str = None) -> tuple:
-        """두 단계 병렬 실행
-
-        Returns:
-            tuple: (success: bool, error_message: str)
-        """
-        results = {'step1': (False, ''), 'step2': (False, '')}
-
-        def run_step(step_name, result_key, model):
-            try:
-                success, error = self._run_step(step_name, model)
-                results[result_key] = (success, error)
-            except Exception as e:
-                error = f'{step_name} 스레드 오류: {str(e)}'
-                self.log(error, 'error')
-                results[result_key] = (False, error)
-
-        # 스레드 시작
-        t1 = threading.Thread(target=run_step, args=(step1_name, 'step1', model_type))
-        t2 = threading.Thread(target=run_step, args=(step2_name, 'step2', None))
-
-        t1.start()
-        t2.start()
-
-        # 완료 대기
-        t1.join()
-        t2.join()
-
-        # 결과 취합
-        success1, error1 = results['step1']
-        success2, error2 = results['step2']
-
-        if success1 and success2:
-            return True, ''
-        else:
-            errors = []
-            if not success1:
-                errors.append(f'{step1_name}: {error1}')
-            if not success2:
-                errors.append(f'{step2_name}: {error2}')
-            return False, ' | '.join(errors)
