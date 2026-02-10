@@ -3,8 +3,9 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib import messages
+from django.db.models import Max
 from django.views.decorators.http import require_POST
-from .models import APIKey
+from .models import APIKey, FreepikAccount
 from apps.pipeline.models import ImageStylePreset, StyleSampleImage, CharacterPreset, VoicePreset, ThumbnailStylePreset
 
 
@@ -43,10 +44,11 @@ def settings_view(request):
     gemini_keys = api_keys.filter(service='gemini')
     replicate_keys = api_keys.filter(service='replicate')
     freepik_keys = api_keys.filter(service='freepik')
-    freepik_cookie_key = api_keys.filter(service='freepik_cookie').first()
-    freepik_wallet_key = api_keys.filter(service='freepik_wallet').first()
     freepik_email_key = api_keys.filter(service='freepik_email').first()
     freepik_password_key = api_keys.filter(service='freepik_password').first()
+
+    # Freepik 다중 계정
+    freepik_accounts = request.user.freepik_accounts.order_by('order', 'pk')
 
     # 프리셋들
     image_styles = ImageStylePreset.objects.filter(user=request.user)
@@ -58,10 +60,9 @@ def settings_view(request):
         'gemini_keys': gemini_keys,
         'replicate_keys': replicate_keys,
         'freepik_keys': freepik_keys,
-        'freepik_cookie_key': freepik_cookie_key,
-        'freepik_wallet_key': freepik_wallet_key,
         'freepik_email_key': freepik_email_key,
         'freepik_password_key': freepik_password_key,
+        'freepik_accounts': freepik_accounts,
         'services': APIKey.SERVICE_CHOICES,
         'gemini_model_choices': User.GEMINI_MODEL_CHOICES,
         'current_gemini_model': request.user.gemini_model,
@@ -146,6 +147,79 @@ def set_default_api_key(request, pk):
         api_key.is_default = True
         api_key.save()
         messages.success(request, f'{api_key.name}이(가) 기본 키로 설정되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def save_freepik_account(request):
+    """Freepik 계정 추가/수정"""
+    name = request.POST.get('name', '').strip()
+    cookie = request.POST.get('cookie', '').strip()
+    wallet_id = request.POST.get('wallet_id', '').strip()
+    account_pk = request.POST.get('account_pk', '').strip()
+
+    if not name:
+        messages.error(request, '계정 이름을 입력해주세요.')
+        return redirect('accounts:settings')
+
+    if not cookie and not wallet_id:
+        messages.error(request, '쿠키 또는 월렛 ID를 입력해주세요.')
+        return redirect('accounts:settings')
+
+    if account_pk:
+        # 수정
+        account = FreepikAccount.objects.filter(user=request.user, pk=account_pk).first()
+        if not account:
+            messages.error(request, '계정을 찾을 수 없습니다.')
+            return redirect('accounts:settings')
+        account.name = name
+        if cookie:
+            account.set_cookie(cookie)
+        if wallet_id:
+            account.set_wallet_id(wallet_id)
+        account.save()
+        messages.success(request, f'Freepik 계정 "{name}"이(가) 수정되었습니다.')
+    else:
+        # 추가
+        max_order = request.user.freepik_accounts.aggregate(
+            max_order=Max('order')
+        )['max_order'] or -1
+        account = FreepikAccount(
+            user=request.user,
+            name=name,
+            order=max_order + 1,
+        )
+        if cookie:
+            account.set_cookie(cookie)
+        if wallet_id:
+            account.set_wallet_id(wallet_id)
+        account.save()
+        messages.success(request, f'Freepik 계정 "{name}"이(가) 추가되었습니다.')
+
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def delete_freepik_account(request, pk):
+    """Freepik 계정 삭제"""
+    account = FreepikAccount.objects.filter(user=request.user, pk=pk).first()
+    if account:
+        name = account.name
+        account.delete()
+        messages.success(request, f'Freepik 계정 "{name}"이(가) 삭제되었습니다.')
+    return redirect('accounts:settings')
+
+
+@login_required
+@require_POST
+def reset_freepik_account(request, pk):
+    """Freepik 계정 다운로드 카운트 수동 리셋"""
+    account = FreepikAccount.objects.filter(user=request.user, pk=pk).first()
+    if account:
+        account.reset_status()
+        messages.success(request, f'Freepik 계정 "{account.name}" 상태가 리셋되었습니다.')
     return redirect('accounts:settings')
 
 

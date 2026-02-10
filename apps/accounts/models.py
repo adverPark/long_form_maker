@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
 from cryptography.fernet import Fernet
 
 
@@ -98,6 +99,86 @@ class APIKey(models.Model):
         if len(key) > 8:
             return f"{key[:4]}...{key[-4:]}"
         return "****"
+
+
+class FreepikAccount(models.Model):
+    """Freepik 다중 계정 (쿠키 기반 다운로드 추적)"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='freepik_accounts')
+    name = models.CharField(max_length=100, verbose_name="계정 이름")
+    encrypted_cookie = models.TextField(blank=True, default='')
+    encrypted_wallet_id = models.TextField(blank=True, default='')
+    order = models.IntegerField(default=0, verbose_name="사용 순서")
+    is_active = models.BooleanField(default=True, verbose_name="활성화")
+
+    # 다운로드 추적
+    download_count = models.IntegerField(default=0, verbose_name="다운로드 횟수")
+    cookie_expired = models.BooleanField(default=False, verbose_name="쿠키 만료")
+
+    class Meta:
+        verbose_name = "Freepik 계정"
+        verbose_name_plural = "Freepik 계정"
+        ordering = ['order', 'pk']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.name}"
+
+    def set_cookie(self, raw: str):
+        fernet = self.user.get_fernet()
+        self.encrypted_cookie = fernet.encrypt(raw.encode()).decode()
+        self.cookie_expired = False
+
+    def get_cookie(self) -> str:
+        if not self.encrypted_cookie:
+            return ''
+        fernet = self.user.get_fernet()
+        return fernet.decrypt(self.encrypted_cookie.encode()).decode()
+
+    def set_wallet_id(self, raw: str):
+        fernet = self.user.get_fernet()
+        self.encrypted_wallet_id = fernet.encrypt(raw.encode()).decode()
+
+    def get_wallet_id(self) -> str:
+        if not self.encrypted_wallet_id:
+            return ''
+        fernet = self.user.get_fernet()
+        return fernet.decrypt(self.encrypted_wallet_id.encode()).decode()
+
+    def get_masked_cookie(self) -> str:
+        cookie = self.get_cookie()
+        if len(cookie) > 20:
+            return f"{cookie[:10]}...{cookie[-10:]}"
+        return "****" if cookie else ""
+
+    def get_masked_wallet(self) -> str:
+        wallet = self.get_wallet_id()
+        if len(wallet) > 12:
+            return f"{wallet[:8]}...{wallet[-4:]}"
+        return "****" if wallet else ""
+
+    def record_download(self):
+        """다운로드 1건 기록 (표시용)"""
+        self.download_count += 1
+        self.save(update_fields=['download_count'])
+
+    def mark_cookie_expired(self):
+        """쿠키 만료 표시"""
+        self.cookie_expired = True
+        self.save(update_fields=['cookie_expired'])
+
+    @classmethod
+    def get_available_account(cls, user, exclude_pks=None):
+        """사용 가능한 첫 번째 계정 반환 (order 순). 없으면 None
+
+        Args:
+            exclude_pks: 이번 실행에서 이미 실패한 계정 PK set (429/쿠키만료)
+        """
+        accounts = cls.objects.filter(user=user, is_active=True).order_by('order', 'pk')
+        if exclude_pks:
+            accounts = accounts.exclude(pk__in=exclude_pks)
+        for account in accounts:
+            if not account.cookie_expired:
+                return account
+        return None
 
 
 class VoiceSample(models.Model):

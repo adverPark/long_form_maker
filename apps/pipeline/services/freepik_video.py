@@ -24,6 +24,15 @@ from urllib.parse import quote_plus
 from django.core.files.base import ContentFile
 from .base import BaseStepService
 from apps.pipeline.models import Scene
+from apps.accounts.models import FreepikAccount
+
+
+class AccountExhaustedError(Exception):
+    """현재 계정의 다운로드 한도 도달 또는 쿠키 만료"""
+    def __init__(self, message, video_id=None, candidates=None):
+        super().__init__(message)
+        self.video_id = video_id
+        self.candidates = candidates or []
 
 
 class FreepikVideoService(BaseStepService):
@@ -78,10 +87,21 @@ class FreepikVideoService(BaseStepService):
         if used_ids:
             self.log(f'이미 사용된 영상 ID {len(used_ids)}개')
 
+        # 사용 가능한 계정 가져오기
+        self._failed_account_pks = set()  # 이번 실행에서 실패한 계정 PK
+        self._current_account = FreepikAccount.get_available_account(self.user)
+        if not self._current_account:
+            raise Exception('사용 가능한 Freepik 계정이 없습니다. 설정에서 계정을 추가하세요.')
+
+        self.log(f'[{self._current_account.name}] 시작')
+
         # 브라우저 시작
-        pw, browser, context, page = self._start_browser()
+        pw, browser, context, page = self._start_browser(self._current_account)
         if not page:
             raise Exception('브라우저 시작 실패')
+
+        self._pw = pw
+        self._browser = browser
 
         success_count = 0
         error_count = 0
@@ -96,11 +116,60 @@ class FreepikVideoService(BaseStepService):
                 try:
                     result = self._process_scene(scene, page, used_ids)
                     if result:
+                        # 다운로드 성공 → 카운트 기록 (표시용)
+                        self._current_account.record_download()
                         success_count += 1
-                        self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료')
+                        self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료 [{self._current_account.name} #{self._current_account.download_count}]')
                     else:
                         error_count += 1
                         self.log(f'씬 {scene.scene_number} 적합한 영상 없음 - 스킵', 'warning')
+                except AccountExhaustedError as e:
+                    # 계정 소진 (429 또는 쿠키 만료) → 다음 계정 전환 후 다운로드만 재시도
+                    self.log(f'{str(e)}', 'warning')
+                    failed_video_id = e.video_id
+                    retry_candidates = e.candidates
+
+                    new_page = self._switch_account()
+                    if not new_page:
+                        self.log(f'모든 Freepik 계정이 소진되었습니다. 성공 {success_count}건까지 저장됨.', 'warning')
+                        break
+
+                    page = new_page
+                    # 이미 선택된 영상의 다운로드만 재시도 (LLM 재호출 X)
+                    retry_ok = False
+                    for candidate in retry_candidates:
+                        try:
+                            video_data = self._download_video_browser(page, candidate['id'])
+                            if video_data:
+                                video_id_str = str(candidate['id'])
+                                filename = f'stock_{self.project.pk}_{scene.scene_number:02d}.mp4'
+                                scene.stock_video.save(filename, ContentFile(video_data), save=False)
+                                Scene.objects.filter(pk=scene.pk).update(
+                                    stock_video=scene.stock_video.name,
+                                    stock_video_id=video_id_str
+                                )
+                                used_ids.add(video_id_str)
+                                self._current_account.record_download()
+                                success_count += 1
+                                self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료 [{self._current_account.name} #{self._current_account.download_count}]')
+                                retry_ok = True
+                                break
+                        except AccountExhaustedError:
+                            # 이 계정도 안 됨 → 또 전환
+                            new_page = self._switch_account()
+                            if not new_page:
+                                break
+                            page = new_page
+                            continue
+                        except Exception as retry_err:
+                            self.log(f'씬 {scene.scene_number} 재시도 실패: {str(retry_err)[:100]}', 'error')
+                            break
+
+                    if not retry_ok:
+                        if not FreepikAccount.get_available_account(self.user, exclude_pks=self._failed_account_pks):
+                            self.log(f'모든 Freepik 계정 실패. 성공 {success_count}건까지 저장됨.', 'warning')
+                            break
+                        error_count += 1
                 except Exception as e:
                     error_count += 1
                     self.log(f'씬 {scene.scene_number} 실패: {str(e)[:100]}', 'error')
@@ -108,8 +177,8 @@ class FreepikVideoService(BaseStepService):
                 # rate limit 방지 (다운로드 API 429 회피)
                 time.sleep(3)
         finally:
-            browser.close()
-            pw.stop()
+            self._browser.close()
+            self._pw.stop()
             self.log('브라우저 종료')
 
         self.log(f'완료: 성공 {success_count}, 실패 {error_count}', 'result')
@@ -122,16 +191,51 @@ class FreepikVideoService(BaseStepService):
     # 브라우저 관리
     # =============================================
 
-    def _start_browser(self):
-        """Playwright 브라우저 시작 + 로그인 (이메일/비번 우선, 쿠키 fallback)"""
+    def _switch_account(self):
+        """계정 전환: 다음 계정으로 브라우저 재시작. 성공 시 새 page, 실패 시 None"""
+        # 현재 계정을 이번 실행에서 제외
+        self._failed_account_pks.add(self._current_account.pk)
+
+        # 현재 브라우저 종료
+        self._browser.close()
+        self._pw.stop()
+        self.log(f'[{self._current_account.name}] 브라우저 종료')
+
+        # 다음 사용 가능 계정 (이번 실행에서 실패한 계정 제외)
+        next_account = FreepikAccount.get_available_account(self.user, exclude_pks=self._failed_account_pks)
+        if not next_account:
+            return None
+
+        self._current_account = next_account
+        self.log(f'[{next_account.name}] 전환')
+
+        # 새 브라우저 시작
+        pw, browser, context, page = self._start_browser(next_account)
+        if not page:
+            return None
+
+        self._pw = pw
+        self._browser = browser
+        return page
+
+    def _start_browser(self, account=None):
+        """Playwright 브라우저 시작 + 쿠키 주입
+
+        Args:
+            account: FreepikAccount 객체 (None이면 기존 방식으로 fallback)
+        """
         from playwright.sync_api import sync_playwright
 
-        wallet_id = self.get_freepik_wallet()
+        if account:
+            wallet_id = account.get_wallet_id()
+            cookie_str = account.get_cookie()
+        else:
+            wallet_id = self.get_freepik_wallet()
+            cookie_str = self.get_freepik_cookie()
+
         if not wallet_id:
             self.log('Freepik walletId 미설정 - 설정에서 추가하세요', 'error')
             return None, None, None, None
-
-        cookie_str = self.get_freepik_cookie()
 
         if not cookie_str:
             self.log('Freepik 쿠키 미설정 - 설정에서 추가하세요', 'error')
@@ -155,20 +259,19 @@ class FreepikVideoService(BaseStepService):
         page.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
 
         # 쿠키 주입
-        if cookie_str:
-            cookies = self._parse_cookies(cookie_str)
-            if cookies:
-                context.add_cookies(cookies)
-                self.log(f'쿠키 {len(cookies)}개 주입')
+        cookies = self._parse_cookies(cookie_str)
+        if cookies:
+            context.add_cookies(cookies)
+            self.log(f'쿠키 {len(cookies)}개 주입')
 
-            try:
-                page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=20000)
-                page.wait_for_timeout(2000)
-                self.log('쿠키 기반 세션 활성화 완료')
-            except Exception as e:
-                self.log(f'세션 활성화 경고: {str(e)[:80]}', 'warning')
+        try:
+            page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=20000)
+            page.wait_for_timeout(2000)
+            self.log('쿠키 기반 세션 활성화 완료')
+        except Exception as e:
+            self.log(f'세션 활성화 경고: {str(e)[:80]}', 'warning')
 
-            return pw, browser, context, page
+        return pw, browser, context, page
 
     def _login_with_credentials(self, page, email: str, password: str) -> bool:
         """Freepik 이메일/비밀번호 로그인"""
@@ -301,13 +404,23 @@ class FreepikVideoService(BaseStepService):
         self.log(f'씬 {scene.scene_number} 선택: ID={selected["id"]}, "{selected["name"]}"')
 
         # 4. 다운로드 (실패 시 다른 후보로 재시도)
-        video_data = self._download_video_browser(page, selected['id'])
+        # AccountExhaustedError 발생 시 candidates 첨부하여 상위 전파 (계정 전환 후 다운로드만 재시도)
+        try:
+            video_data = self._download_video_browser(page, selected['id'])
+        except AccountExhaustedError as e:
+            e.candidates = candidates
+            raise
+
         if not video_data:
             # 선택된 영상 제외하고 나머지 후보로 순차 시도
             remaining = [c for c in candidates if c['id'] != selected['id']]
             for fallback in remaining[:3]:
                 self.log(f'씬 {scene.scene_number} 대체 후보 시도: ID={fallback["id"]}, "{fallback["name"]}"')
-                video_data = self._download_video_browser(page, fallback['id'])
+                try:
+                    video_data = self._download_video_browser(page, fallback['id'])
+                except AccountExhaustedError as e:
+                    e.candidates = candidates
+                    raise
                 if video_data:
                     selected = fallback
                     break
@@ -477,8 +590,17 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
     # =============================================
 
     def _download_video_browser(self, page, video_id: str) -> bytes:
-        """브라우저 컨텍스트에서 fetch()로 다운로드 (Firebase 토큰 자동 갱신)"""
-        wallet_id = self.get_freepik_wallet()
+        """브라우저 컨텍스트에서 fetch()로 다운로드 (Firebase 토큰 자동 갱신)
+
+        Raises:
+            AccountExhaustedError: 429 발생 시 (계정 한도 도달)
+        """
+        # 현재 계정에서 wallet_id 가져오기
+        if hasattr(self, '_current_account') and self._current_account:
+            wallet_id = self._current_account.get_wallet_id()
+        else:
+            wallet_id = self.get_freepik_wallet()
+
         if not wallet_id:
             self.log('Freepik walletId 미설정', 'error')
             return None
@@ -508,17 +630,28 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                     self.log(f'다운로드 API 오류 {error_code}: {error_msg} (시도 {attempt + 1})', 'warning')
 
                     if error_code in (401, 403):
-                        # 토큰 만료 → 페이지 새로고침으로 Firebase 토큰 갱신
-                        self.log('토큰 만료 추정 - 페이지 새로고침으로 갱신 시도', 'warning')
-                        page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=15000)
-                        page.wait_for_timeout(3000)
-                        continue
+                        if attempt < self.MAX_RETRIES - 1:
+                            # 첫 시도: 페이지 새로고침으로 Firebase 토큰 갱신
+                            self.log('토큰 만료 추정 - 페이지 새로고침으로 갱신 시도', 'warning')
+                            page.goto('https://kr.freepik.com/', wait_until='domcontentloaded', timeout=15000)
+                            page.wait_for_timeout(3000)
+                            continue
+                        else:
+                            # 재시도 다 실패 → 쿠키 만료 확정 → DB에 기록 + 다음 계정으로 전환
+                            if hasattr(self, '_current_account') and self._current_account:
+                                self._current_account.mark_cookie_expired()
+                                acct_name = self._current_account.name
+                            else:
+                                acct_name = '?'
+                            raise AccountExhaustedError(
+                                f'[{acct_name}] 인증 실패 (쿠키 만료) - 다음 계정으로 전환',
+                                video_id=video_id)
 
                     if error_code == 429:
-                        wait = 10 * (attempt + 1)
-                        self.log(f'429 Rate limit - {wait}초 대기', 'warning')
-                        time.sleep(wait)
-                        continue
+                        # 429 = 계정 한도 도달 → 즉시 계정 전환 (재시도 X)
+                        raise AccountExhaustedError(
+                            f'429 Rate limit - 계정 다운로드 한도 도달',
+                            video_id=video_id)
 
                     if attempt < self.MAX_RETRIES - 1:
                         time.sleep(2)
@@ -545,6 +678,8 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                     return self._convert_to_h264(raw_data)
                 return raw_data
 
+            except AccountExhaustedError:
+                raise  # 상위로 전파
             except Exception as e:
                 self.log(f'다운로드 오류 (시도 {attempt + 1}): {str(e)[:80]}', 'error')
                 if attempt < self.MAX_RETRIES - 1:

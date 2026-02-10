@@ -217,84 +217,96 @@
                 <p class="text-muted">등록된 Freepik 키가 없습니다.</p>
                 {% endif %}
 
-                <!-- Freepik 로그인 (자동 브라우저 인증) -->
-                <h6 class="mt-4"><i class="bi bi-box-arrow-in-right"></i> Freepik 로그인 (자동 인증)</h6>
-                <p class="text-muted small mb-2">이메일/비밀번호 저장 시 브라우저 자동 로그인으로 토큰이 자동 갱신됩니다. 쿠키 수동 갱신 불필요.</p>
+                <!-- Freepik 다중 계정 관리 -->
+                <h6 class="mt-4"><i class="bi bi-camera-video"></i> Freepik 계정 관리</h6>
+                <p class="text-muted small mb-2">프리미엄 계정 여러 개를 등록하면 다운로드 한도(95건/24시간) 도달 시 자동으로 다음 계정으로 전환됩니다.</p>
 
+                {% if freepik_accounts %}
                 <div class="row g-2 mb-3">
-                    <!-- Email -->
-                    <div class="col-md-5">
-                        <form method="post" action="{% url 'accounts:save_api_key' %}">
-                            {% csrf_token %}
-                            <input type="hidden" name="service" value="freepik_email">
-                            <input type="hidden" name="name" value="기본">
-                            <label class="form-label small">Freepik 이메일</label>
-                            <div class="input-group input-group-sm">
-                                <input type="email" name="api_key" class="form-control"
-                                       placeholder="your@email.com"
-                                       value="{% if freepik_email_key %}{{ freepik_email_key.get_key }}{% endif %}">
-                                <button type="submit" class="btn btn-outline-warning">
-                                    <i class="bi bi-save"></i>
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                    <!-- Password -->
-                    <div class="col-md-5">
-                        <form method="post" action="{% url 'accounts:save_api_key' %}">
-                            {% csrf_token %}
-                            <input type="hidden" name="service" value="freepik_password">
-                            <input type="hidden" name="name" value="기본">
-                            <label class="form-label small">Freepik 비밀번호</label>
-                            <div class="input-group input-group-sm">
-                                <input type="password" name="api_key" class="form-control"
-                                       placeholder="••••••••"
-                                       {% if freepik_password_key %}value="********"{% endif %}>
-                                <button type="submit" class="btn btn-outline-warning">
-                                    <i class="bi bi-save"></i>
-                                </button>
-                            </div>
-                            {% if freepik_password_key %}
-                            <small class="text-success">저장됨</small>
-                            {% endif %}
-                        </form>
-                    </div>
-                    <!-- Wallet ID -->
-                    <div class="col-md-5">
-                        <form method="post" action="{% url 'accounts:save_api_key' %}">
-                            {% csrf_token %}
-                            <input type="hidden" name="service" value="freepik_wallet">
-                            <input type="hidden" name="name" value="기본">
-                            <label class="form-label small">Wallet ID <small class="text-muted">(Network탭에서 확인)</small></label>
-                            <div class="input-group input-group-sm">
-                                <input type="text" name="api_key" class="form-control"
-                                       placeholder="eed025d7-83b9-..."
-                                       value="{% if freepik_wallet_key %}{{ freepik_wallet_key.get_key }}{% endif %}">
-                                <button type="submit" class="btn btn-outline-warning">
-                                    <i class="bi bi-save"></i>
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+                    {% for acct in freepik_accounts %}
+                    <div class="col-md-6">
+                        <div class="card {% if acct.cookie_expired %}border-danger bg-danger bg-opacity-10{% else %}border-success{% endif %}">
+                            <div class="card-body p-3">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <strong>{{ acct.name }}</strong>
+                                    {% if acct.cookie_expired %}
+                                    <span class="badge bg-danger">쿠키 만료</span>
+                                    {% endif %}
+                                </div>
+                                <div class="small text-muted mb-1">
+                                    쿠키: <code>{{ acct.get_masked_cookie }}</code>
+                                </div>
+                                <div class="small text-muted mb-2">
+                                    월렛: <code>{{ acct.get_masked_wallet }}</code>
+                                </div>
 
-                <!-- Cookie (수동 백업용, 접기) -->
-                <details class="mb-2">
-                    <summary class="small text-muted" style="cursor:pointer;">수동 쿠키 입력 (로그인 안 될 때 백업용)</summary>
-                    <form method="post" action="{% url 'accounts:save_api_key' %}" class="mt-2">
-                        {% csrf_token %}
-                        <input type="hidden" name="service" value="freepik_cookie">
-                        <input type="hidden" name="name" value="기본">
-                        <div class="mb-2">
-                            <textarea name="api_key" class="form-control form-control-sm" rows="2"
-                                      placeholder="GRID=...; UID=...; GR_TOKEN=...; ...">{% if freepik_cookie_key %}{{ freepik_cookie_key.get_key }}{% endif %}</textarea>
+                                {% if acct.cookie_expired %}
+                                <!-- 쿠키 만료 시 갱신 폼 표시 -->
+                                <div class="alert alert-danger py-2 px-3 mb-2 small">
+                                    <i class="bi bi-exclamation-triangle"></i> 쿠키가 만료되어 다운로드 불가. 새 쿠키를 입력하세요.
+                                </div>
+                                <form method="post" action="{% url 'accounts:save_freepik_account' %}" class="mb-2">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="account_pk" value="{{ acct.pk }}">
+                                    <input type="hidden" name="name" value="{{ acct.name }}">
+                                    <textarea name="cookie" class="form-control form-control-sm mb-1" rows="2"
+                                              placeholder="새 쿠키 붙여넣기"></textarea>
+                                    <button type="submit" class="btn btn-sm btn-danger w-100">
+                                        <i class="bi bi-arrow-repeat"></i> 쿠키 갱신
+                                    </button>
+                                </form>
+                                {% endif %}
+
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="small">
+                                        다운로드: <strong>{{ acct.download_count }}</strong>건
+                                    </span>
+                                    <form method="post" action="{% url 'accounts:delete_freepik_account' acct.pk %}" class="d-inline">
+                                        {% csrf_token %}
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                onclick="return confirm('정말 삭제하시겠습니까?')" title="계정 삭제">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
                         </div>
-                        <button type="submit" class="btn btn-sm btn-outline-secondary">
-                            <i class="bi bi-save"></i> 쿠키 저장
-                        </button>
-                        {% if freepik_cookie_key %}
-                        <span class="text-success small ms-2">저장됨</span>
-                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted small">등록된 Freepik 계정이 없습니다.</p>
+                {% endif %}
+
+                <!-- 계정 추가 폼 -->
+                <details class="mb-2">
+                    <summary class="btn btn-sm btn-outline-primary" style="cursor:pointer;">
+                        <i class="bi bi-plus-lg"></i> 계정 추가
+                    </summary>
+                    <form method="post" action="{% url 'accounts:save_freepik_account' %}" class="mt-2 p-3 bg-light rounded">
+                        {% csrf_token %}
+                        <div class="row g-2">
+                            <div class="col-md-3">
+                                <label class="form-label small">계정 이름</label>
+                                <input type="text" name="name" class="form-control form-control-sm"
+                                       placeholder="예: 계정1" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Wallet ID <small class="text-muted">(Network탭에서 확인)</small></label>
+                                <input type="text" name="wallet_id" class="form-control form-control-sm"
+                                       placeholder="eed025d7-83b9-..." required>
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label small">쿠키</label>
+                                <textarea name="cookie" class="form-control form-control-sm" rows="2"
+                                          placeholder="GRID=...; UID=...; GR_TOKEN=...; ..." required></textarea>
+                            </div>
+                            <div class="col-md-12">
+                                <button type="submit" class="btn btn-sm btn-primary">
+                                    <i class="bi bi-save"></i> 저장
+                                </button>
+                            </div>
+                        </div>
                     </form>
                 </details>
             </div>

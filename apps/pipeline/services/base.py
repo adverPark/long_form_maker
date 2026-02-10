@@ -8,7 +8,7 @@ from django.db import close_old_connections
 from google import genai
 from google.genai import types
 from apps.prompts.models import AgentPrompt, UserAgentPrompt
-from apps.accounts.models import APIKey
+from apps.accounts.models import APIKey, FreepikAccount
 
 
 # API 호출 타임아웃 (초)
@@ -187,19 +187,23 @@ class BaseStepService(ABC):
             return ''
         return api_key.get_key()
 
+    def get_freepik_account(self):
+        """사용 가능한 Freepik 계정 반환 (FreepikAccount)"""
+        return FreepikAccount.get_available_account(self.user)
+
     def get_freepik_cookie(self) -> str:
-        """사용자의 Freepik 웹사이트 쿠키 가져오기"""
-        api_key = self.user.api_keys.filter(service='freepik_cookie').first()
-        if not api_key:
-            return ''
-        return api_key.get_key()
+        """사용자의 Freepik 웹사이트 쿠키 가져오기 (첫 번째 활성 계정에서)"""
+        account = FreepikAccount.get_available_account(self.user)
+        if account:
+            return account.get_cookie()
+        return ''
 
     def get_freepik_wallet(self) -> str:
-        """사용자의 Freepik Wallet ID 가져오기"""
-        api_key = self.user.api_keys.filter(service='freepik_wallet').first()
-        if not api_key:
-            return ''
-        return api_key.get_key()
+        """사용자의 Freepik Wallet ID 가져오기 (첫 번째 활성 계정에서)"""
+        account = FreepikAccount.get_available_account(self.user)
+        if account:
+            return account.get_wallet_id()
+        return ''
 
     def get_prompt(self) -> str:
         """프롬프트 가져오기 (사용자별 > 시스템 기본)"""

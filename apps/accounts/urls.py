@@ -12,6 +12,10 @@ urlpatterns = [
     path('api-key/default/<int:pk>/', views.set_default_api_key, name='set_default_api_key'),
     path('gemini-model/', views.set_gemini_model, name='set_gemini_model'),
 
+    # Freepik 계정 관리
+    path('freepik-account/save/', views.save_freepik_account, name='save_freepik_account'),
+    path('freepik-account/<int:pk>/delete/', views.delete_freepik_account, name='delete_freepik_account'),
+
     # 이미지 스타일 프리셋
     path('image-style/save/', views.save_image_style, name='save_image_style'),
     path('image-style/edit/<int:pk>/', views.edit_image_style, name='edit_image_style'),
