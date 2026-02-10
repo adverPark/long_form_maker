@@ -674,7 +674,12 @@ JSON 형식으로 title과 content를 출력하세요.'''
         if research.get('transcript'):
             transcript_text = research['transcript'][:3000] + "..." if len(research.get('transcript', '')) > 3000 else research.get('transcript', '')
 
+        from datetime import date
+        today = date.today().strftime('%Y년 %m월 %d일')
+
         return f"""# 대본 작성 자료
+
+**오늘 날짜: {today}** (대본에 연도/날짜 언급 시 반드시 현재 기준으로 작성. "2025년"이 아닌 "{date.today().year}년" 사용. 단, 오늘 날짜 자체를 대본에 의미 없이 언급하지 마세요)
 
 ## 주제
 {research.get('topic', '주제 없음')}

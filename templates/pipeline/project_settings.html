@@ -289,6 +289,17 @@
                     <div class="preset-desc">모든 씬에 AI 생성 이미지 사용</div>
                 </div>
             </label>
+            <label class="preset-option {% if project.freepik_interval == 1 %}selected{% endif %}">
+                <input type="radio" name="freepik_interval" value="1"
+                       {% if project.freepik_interval == 1 %}checked{% endif %}>
+                <div class="preset-preview">
+                    <i class="bi bi-camera-video-fill text-warning"></i>
+                </div>
+                <div class="preset-info">
+                    <div class="preset-name">100% 스톡</div>
+                    <div class="preset-desc">모든 씬에 스톡 영상 사용 (이미지 생성 불필요)</div>
+                </div>
+            </label>
             <label class="preset-option {% if project.freepik_interval == 2 %}selected{% endif %}">
                 <input type="radio" name="freepik_interval" value="2"
                        {% if project.freepik_interval == 2 %}checked{% endif %}>

@@ -229,6 +229,9 @@ class ScriptPlannerService(BaseStepService):
 
     def _build_prompt(self, transcript_analysis: str, comment_analysis: str) -> str:
         """계획 프롬프트 생성"""
+        from datetime import date
+        today = date.today().strftime('%Y년 %m월 %d일')
+
         system_prompt = self.get_prompt()
 
         if system_prompt:
@@ -238,6 +241,7 @@ class ScriptPlannerService(BaseStepService):
             prompt = self.DEFAULT_PROMPT.replace('{transcript_analysis}', transcript_analysis)
             prompt = prompt.replace('{comment_analysis}', comment_analysis)
 
+        prompt = f"**오늘 날짜: {today}** (대본에 연도/날짜 언급 시 반드시 현재 기준으로 작성. 단, 오늘 날짜 자체를 대본에 의미 없이 언급하지 마세요)\n\n{prompt}"
         return prompt
 
     def _save_plan(self, research: Research, result: str):

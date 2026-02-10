@@ -49,10 +49,16 @@ class FreepikVideoService(BaseStepService):
             raise ValueError('씬이 없습니다.')
 
         total = len(scenes)
-        self.log(f'총 {total}개 씬, 매 {interval}번째 씬에 스톡 영상 삽입')
 
-        # 대상 씬 선별 (2번째부터 시작, 매 interval씬마다: 2, 2+interval, 2+2*interval...)
-        target_scenes = [s for s in scenes if s.scene_number >= 2 and (s.scene_number - 2) % interval == 0]
+        # 대상 씬 선별
+        if interval == 1:
+            # 100% 스톡: 모든 씬
+            target_scenes = list(scenes)
+            self.log(f'총 {total}개 씬, 100% 스톡 영상 모드')
+        else:
+            # N씬 간격: 2번째부터 시작 (2, 2+interval, 2+2*interval...)
+            target_scenes = [s for s in scenes if s.scene_number >= 2 and (s.scene_number - 2) % interval == 0]
+            self.log(f'총 {total}개 씬, 매 {interval}번째 씬에 스톡 영상 삽입')
         # 이미 stock_video 있는 씬 제외
         target_scenes = [s for s in target_scenes if not s.stock_video]
 
@@ -99,8 +105,8 @@ class FreepikVideoService(BaseStepService):
                     error_count += 1
                     self.log(f'씬 {scene.scene_number} 실패: {str(e)[:100]}', 'error')
 
-                # rate limit 방지
-                time.sleep(1)
+                # rate limit 방지 (다운로드 API 429 회피)
+                time.sleep(3)
         finally:
             browser.close()
             pw.stop()
@@ -337,7 +343,6 @@ class FreepikVideoService(BaseStepService):
 Extract exactly 2 English search keywords for finding a stock video that visually matches this scene.
 
 Scene narration (Korean): {narration}
-Visual description: {image_prompt}
 
 Rules:
 - Each keyword should be 2-4 words
@@ -449,7 +454,6 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
         prompt = f"""Choose the best stock video for this scene.
 
 Scene narration (Korean): {scene.narration}
-Visual description: {scene.image_prompt}
 
 Available videos:
 {candidate_text}
@@ -511,7 +515,7 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
                         continue
 
                     if error_code == 429:
-                        wait = 3 * (attempt + 1)
+                        wait = 10 * (attempt + 1)
                         self.log(f'429 Rate limit - {wait}초 대기', 'warning')
                         time.sleep(wait)
                         continue
