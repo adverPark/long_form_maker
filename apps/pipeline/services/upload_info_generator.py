@@ -66,7 +66,7 @@ class UploadInfoGeneratorService(BaseStepService):
         for s in scene_info_list:
             mins = int(s['time'] // 60)
             secs = int(s['time'] % 60)
-            scenes_text += f"[{mins}:{secs:02d}] 씬{s['scene']} ({s['section']}): {s['narration']}\n"
+            scenes_text += f"[{mins:02d}:{secs:02d}] 씬{s['scene']} ({s['section']}): {s['narration']}\n"
 
         # UploadInfo 가져오거나 생성
         info, created = UploadInfo.objects.get_or_create(
@@ -108,8 +108,8 @@ JSON 형식:
     "title": "영상 제목",
     "description": "훅\\n\\n요약\\n\\n📌 구독과 좋아요 부탁드려요!\\n🔔 알림 설정하세요!",
     "timeline": [
-        {{"time": "0:00", "title": "시작 제목"}},
-        {{"time": "1:16", "title": "다음 제목"}},
+        {{"time": "00:00", "title": "시작 제목"}},
+        {{"time": "01:16", "title": "다음 제목"}},
         ...
     ]
 }}
@@ -151,8 +151,57 @@ JSON 형식:
         info.tags = tags[:15]
         self.log(f'태그: {len(info.tags)}개')
 
-        # ===== 3단계: 썸네일 프롬프트 생성 =====
-        self.update_progress(80, '썸네일 프롬프트 생성 중...')
+        # ===== 3단계: 참고자료 생성 (리서치 출처 기반) =====
+        self.update_progress(70, '참고자료 생성 중...')
+        self.raise_if_cancelled()
+
+        try:
+            research = Research.objects.filter(project=self.project).first()
+            research_text = ''
+            if research:
+                # content_analysis의 research_result (출처 포함 리서치 텍스트)
+                if research.content_analysis and research.content_analysis.get('research_result'):
+                    research_text += research.content_analysis['research_result'] + '\n\n'
+                # article_summaries 폴백
+                if not research_text and research.article_summaries:
+                    for item in research.article_summaries:
+                        summary = item.get('summary', '')
+                        if summary:
+                            research_text += summary + '\n\n'
+                # manual_notes도 포함
+                if research.manual_notes:
+                    research_text += research.manual_notes + '\n\n'
+
+            if research_text.strip():
+                ref_prompt = f"""아래 리서치 자료에서 참고자료 목록을 만들어주세요.
+
+리서치 내용:
+{research_text[:5000]}
+
+규칙:
+- 각 섹션의 제목과 출처를 한 줄로 정리
+- 형식: "섹션 제목 - 출처1, 출처2, ..."
+- "출처:" 라인에 있는 출처명을 그대로 사용
+- 출처가 없는 섹션은 제외
+- 번호 없이, 줄바꿈으로 구분
+- 설명이나 부연 없이 목록만 출력
+
+예시:
+AI 도입으로 인한 생산성 향상 수치 - Klarna Press Release, Amazon Q Announcement, GitHub Blog
+빅테크 기업 주가 추이 - Nasdaq, Economic Times, Forbes"""
+
+                ref_response = self.call_gemini(ref_prompt, model_type='2.5-flash')
+                info.references = ref_response.strip()
+                self.log(f'참고자료: {len(info.references)}자')
+            else:
+                self.log('리서치 데이터 없음 - 참고자료 스킵', 'warning')
+                info.references = ''
+        except Exception as e:
+            self.log(f'참고자료 생성 실패: {e}', 'warning')
+            info.references = ''
+
+        # ===== 4단계: 썸네일 프롬프트 생성 =====
+        self.update_progress(85, '썸네일 프롬프트 생성 중...')
         self.raise_if_cancelled()
 
         intro_narrations = [s['narration'] for s in scene_info_list[:5]]

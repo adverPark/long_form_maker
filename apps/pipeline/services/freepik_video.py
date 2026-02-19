@@ -35,6 +35,11 @@ class AccountExhaustedError(Exception):
         self.candidates = candidates or []
 
 
+class BrowserCrashedError(Exception):
+    """브라우저 연결 끊김 (재시작 필요)"""
+    pass
+
+
 class FreepikVideoService(BaseStepService):
     """Freepik 스톡 영상 서비스"""
 
@@ -170,6 +175,21 @@ class FreepikVideoService(BaseStepService):
                             self.log(f'모든 Freepik 계정 실패. 성공 {success_count}건까지 저장됨.', 'warning')
                             break
                         error_count += 1
+                except BrowserCrashedError as e:
+                    self.log(f'브라우저 충돌: {str(e)[:80]}', 'warning')
+                    try:
+                        page = self._restart_browser()
+                        # 현재 씬 재시도
+                        result = self._process_scene(scene, page, used_ids)
+                        if result:
+                            self._current_account.record_download()
+                            success_count += 1
+                            self.log(f'씬 {scene.scene_number} 스톡 영상 저장 완료 (재시도) [{self._current_account.name} #{self._current_account.download_count}]')
+                        else:
+                            error_count += 1
+                    except Exception as retry_err:
+                        error_count += 1
+                        self.log(f'씬 {scene.scene_number} 재시도 실패: {str(retry_err)[:100]}', 'error')
                 except Exception as e:
                     error_count += 1
                     self.log(f'씬 {scene.scene_number} 실패: {str(e)[:100]}', 'error')
@@ -190,6 +210,21 @@ class FreepikVideoService(BaseStepService):
     # =============================================
     # 브라우저 관리
     # =============================================
+
+    def _restart_browser(self):
+        """브라우저 충돌 후 재시작. 새 page 반환."""
+        try:
+            self._browser.close()
+            self._pw.stop()
+        except Exception:
+            pass
+        self.log('브라우저 재시작 중...')
+        pw, browser, context, page = self._start_browser(self._current_account)
+        if not page:
+            raise Exception('브라우저 재시작 실패')
+        self._pw = pw
+        self._browser = browser
+        return page
 
     def _switch_account(self):
         """계정 전환: 다음 계정으로 브라우저 재시작. 성공 시 새 page, 실패 시 None"""
@@ -376,13 +411,25 @@ class FreepikVideoService(BaseStepService):
             self.log(f'씬 {scene.scene_number} 키워드 추출 실패', 'warning')
             return False
 
-        self.log(f'씬 {scene.scene_number} 키워드: {keywords}')
+        specific_keywords = keywords[:2]
+        broad_keyword = keywords[2] if len(keywords) > 2 else None
+        self.log(f'씬 {scene.scene_number} 키워드: {specific_keywords} (넓은: {broad_keyword})')
 
-        # 2. 키워드별 검색, 후보 수집 (중복 제외)
+        # 2. 구체적 키워드 먼저 검색, 후보 수집 (중복 제외)
         candidates = []
         seen_ids = set()
-        for kw in keywords:
+        for kw in specific_keywords:
             results = self._search_videos_browser(page, kw, used_ids)
+            for v in results:
+                vid = str(v['id'])
+                if vid not in seen_ids:
+                    seen_ids.add(vid)
+                    candidates.append(v)
+
+        # 구체적 키워드 둘 다 실패 시 → 넓은 키워드로 fallback
+        if not candidates and broad_keyword:
+            self.log(f'씬 {scene.scene_number} 구체적 키워드 결과 없음 → 넓은 키워드 "{broad_keyword}" 시도')
+            results = self._search_videos_browser(page, broad_keyword, used_ids)
             for v in results:
                 vid = str(v['id'])
                 if vid not in seen_ids:
@@ -445,25 +492,28 @@ class FreepikVideoService(BaseStepService):
     # =============================================
 
     def _extract_keywords(self, scene) -> list:
-        """LLM으로 스톡 영상 검색 키워드 2개 추출"""
+        """LLM으로 스톡 영상 검색 키워드 3개 추출 (구체적 2개 + 넓은 1개)"""
         narration = scene.narration or ''
         image_prompt = scene.image_prompt or ''
 
         if not narration and not image_prompt:
             return []
 
-        prompt = f"""You are a stock video search expert.
-Extract exactly 2 English search keywords for finding a stock video that visually matches this scene.
+        prompt = f"""You are a stock video search expert for Freepik.
+Extract exactly 3 English search keywords for finding a stock video that visually matches this scene.
 
 Scene narration (Korean): {narration}
 
 Rules:
-- Each keyword should be 2-4 words
-- Focus on the main visual subject (people, objects, places, actions)
-- Make keywords suitable for stock video search (generic, not too specific)
+- Line 1: Specific keyword (2-4 words) - the main visual subject of the scene
+- Line 2: Different specific keyword (2-4 words) - a secondary visual element of the scene
+- Line 3: Broad keyword (1-2 words) - a general category that ALWAYS has stock video results (fallback)
+- Broad keyword examples: technology, computer, city, nature, office, people walking, hands typing, ocean, money, food, medical, construction, car driving, sunset, factory
+- Focus on VISUAL elements only (what a camera would film)
+- Do NOT use abstract concepts (e.g. "reality crumbling", "unusual occurrence")
 - Do NOT include style/mood words (dramatic, cinematic, etc.)
 
-Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
+Return exactly 3 lines, one keyword per line. No numbering, no explanation."""
 
         try:
             response = self.call_gemini(prompt, model_type='2.5-flash')
@@ -474,7 +524,7 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
                 line = re.sub(r'^[\d\.\)\-\*]+\s*', '', line).strip()
                 if line:
                     cleaned.append(line)
-            return cleaned[:2]
+            return cleaned[:3]
         except Exception as e:
             self.log(f'키워드 추출 오류: {str(e)[:80]}', 'error')
             return []
@@ -499,8 +549,9 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
                     const results = [];
                     const figures = document.querySelectorAll('figure');
                     for (const fig of figures) {
-                        const link = fig.parentElement;
-                        if (!link || link.tagName !== 'A') continue;
+                        // figure 안의 a 태그에서 href 추출
+                        const link = fig.querySelector('a[href]');
+                        if (!link) continue;
                         const href = link.href || '';
 
                         const idMatch = href.match(/_(\\d+)(?:#|$)/);
@@ -537,7 +588,10 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
                     break  # 결과 없으면 다음 페이지 스킵
 
             except Exception as e:
-                self.log(f'검색 오류 ({keyword} p{pg}): {str(e)[:80]}', 'error')
+                error_msg = str(e)
+                if any(p in error_msg for p in ['Connection closed', 'Target closed', 'browser has been closed']):
+                    raise BrowserCrashedError(f'브라우저 연결 끊김: {error_msg[:80]}')
+                self.log(f'검색 오류 ({keyword} p{pg}): {error_msg[:80]}', 'error')
                 break
 
         if all_videos:

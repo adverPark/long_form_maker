@@ -2,33 +2,455 @@
 
 {% block title %}새 프로젝트 - 롱폼 영상 제작{% endblock %}
 
+{% block extra_css %}
+<style>
+.preset-card {
+    margin-bottom: 1.5rem;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+}
+.preset-header {
+    padding: 0.75rem 1rem;
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    font-weight: bold;
+}
+.preset-body {
+    padding: 1rem;
+}
+.preset-option {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.preset-option:hover {
+    border-color: #adb5bd;
+    background: #f8f9fa;
+}
+.preset-option.selected {
+    border-color: #0d6efd;
+    background: #e7f1ff;
+}
+.preset-option input[type="radio"] {
+    display: none;
+}
+.preset-preview {
+    width: 80px;
+    height: 60px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-right: 1rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.preset-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.preset-info {
+    flex: 1;
+}
+.preset-name {
+    font-weight: bold;
+    margin-bottom: 0.25rem;
+}
+.preset-desc {
+    font-size: 0.85em;
+    color: #6c757d;
+}
+.default-badge {
+    font-size: 0.7em;
+    vertical-align: middle;
+}
+.no-preset {
+    padding: 1rem;
+    text-align: center;
+    color: #6c757d;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h4 class="mb-0"><i class="bi bi-plus-lg"></i> 새 프로젝트</h4>
+    <div class="col-lg-8">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="bi bi-plus-lg"></i> 새 프로젝트</h2>
+            <a href="{% url 'pipeline:dashboard' %}" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> 돌아가기
+            </a>
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+
+            <!-- 프로젝트 이름 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-pencil"></i> 프로젝트 이름
+                </div>
+                <div class="preset-body">
+                    <input type="text" name="name" id="name" class="form-control"
+                           placeholder="예: 금리 인상의 영향" required autofocus>
+                    <small class="text-muted">영상 제목과 관련된 이름을 입력하세요.</small>
+                </div>
             </div>
-            <div class="card-body">
-                <form method="post">
-                    {% csrf_token %}
-                    <div class="mb-3">
-                        <label for="name" class="form-label">프로젝트 이름</label>
-                        <input type="text" name="name" id="name" class="form-control"
-                               placeholder="예: 금리 인상의 영향" required autofocus>
-                        <small class="text-muted">영상 제목과 관련된 이름을 입력하세요.</small>
+
+            <!-- 이미지 생성 모델 선택 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-gpu-card"></i> 이미지 생성 모델
+                </div>
+                <div class="preset-body">
+                    {% for value, label in image_model_choices %}
+                    <label class="preset-option {% if forloop.first %}selected{% endif %}">
+                        <input type="radio" name="image_model" value="{{ value }}"
+                               {% if forloop.first %}checked{% endif %}>
+                        <div class="preset-preview">
+                            {% if value == 'gemini-3-pro' %}
+                            <i class="bi bi-stars text-warning"></i>
+                            {% else %}
+                            <i class="bi bi-lightning-charge text-primary"></i>
+                            {% endif %}
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                {% if value == 'gemini-3-pro' %}
+                                Gemini 3 Pro
+                                <span class="badge bg-warning text-dark">고품질</span>
+                                {% else %}
+                                Gemini 2.5 Flash
+                                <span class="badge bg-success">저렴</span>
+                                {% endif %}
+                            </div>
+                            <div class="preset-desc">{{ label }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                    <div class="alert alert-warning mt-2 mb-0" style="font-size: 0.85em;">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Flash 모델 사용 시:</strong> 한글 텍스트가 불안정하므로 이미지 프롬프트에서 텍스트가 자동 제외됩니다.
                     </div>
-                    <div class="d-flex gap-2">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-lg"></i> 생성
-                        </button>
-                        <a href="{% url 'pipeline:dashboard' %}" class="btn btn-secondary">
-                            <i class="bi bi-x-lg"></i> 취소
-                        </a>
-                    </div>
-                </form>
+                </div>
             </div>
+
+            <!-- 이미지 스타일 선택 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-brush"></i> 이미지 스타일
+                </div>
+                <div class="preset-body">
+                    {% if image_styles %}
+                    <label class="preset-option {% if not image_styles_has_default %}selected{% endif %}" id="image-style-none">
+                        <input type="radio" name="image_style" value="" {% if not image_styles_has_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            <i class="bi bi-x-lg text-muted"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">선택 안함</div>
+                            <div class="preset-desc">기본 스타일 사용</div>
+                        </div>
+                    </label>
+
+                    {% for style in image_styles %}
+                    <label class="preset-option {% if style.is_default %}selected{% endif %}">
+                        <input type="radio" name="image_style" value="{{ style.pk }}"
+                               {% if style.is_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            {% if style.sample_images.first %}
+                            <img src="{{ style.sample_images.first.image.url }}" alt="">
+                            {% else %}
+                            <i class="bi bi-palette text-muted"></i>
+                            {% endif %}
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                {{ style.name }}
+                                {% if style.is_default %}<span class="badge bg-primary default-badge">기본</span>{% endif %}
+                            </div>
+                            <div class="preset-desc">{{ style.style_prompt|truncatechars:80 }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                    {% else %}
+                    <div class="no-preset">
+                        <i class="bi bi-palette display-6"></i>
+                        <p class="mt-2 mb-0">등록된 스타일이 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 캐릭터 선택 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-person"></i> 캐릭터
+                </div>
+                <div class="preset-body">
+                    {% if characters %}
+                    <label class="preset-option {% if not characters_has_default %}selected{% endif %}">
+                        <input type="radio" name="character" value="" {% if not characters_has_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            <i class="bi bi-x-lg text-muted"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">선택 안함</div>
+                            <div class="preset-desc">캐릭터 없이 진행</div>
+                        </div>
+                    </label>
+
+                    {% for char in characters %}
+                    <label class="preset-option {% if char.is_default %}selected{% endif %}">
+                        <input type="radio" name="character" value="{{ char.pk }}"
+                               {% if char.is_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            {% if char.image %}
+                            <img src="{{ char.image.url }}" alt="">
+                            {% else %}
+                            <i class="bi bi-person text-muted"></i>
+                            {% endif %}
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                {{ char.name }}
+                                {% if char.is_default %}<span class="badge bg-primary default-badge">기본</span>{% endif %}
+                            </div>
+                            <div class="preset-desc">{{ char.character_prompt|truncatechars:80 }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                    {% else %}
+                    <div class="no-preset">
+                        <i class="bi bi-person display-6"></i>
+                        <p class="mt-2 mb-0">등록된 캐릭터가 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- TTS 음성 선택 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-mic"></i> TTS 음성
+                </div>
+                <div class="preset-body">
+                    {% if voices %}
+                    <label class="preset-option {% if not voices_has_default %}selected{% endif %}">
+                        <input type="radio" name="voice" value="" {% if not voices_has_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            <i class="bi bi-x-lg text-muted"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">선택 안함</div>
+                            <div class="preset-desc">기본 음성 사용</div>
+                        </div>
+                    </label>
+
+                    {% for voice in voices %}
+                    <label class="preset-option {% if voice.is_default %}selected{% endif %}">
+                        <input type="radio" name="voice" value="{{ voice.pk }}"
+                               {% if voice.is_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            <i class="bi bi-soundwave text-primary"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                {{ voice.name }}
+                                {% if voice.is_default %}<span class="badge bg-primary default-badge">기본</span>{% endif %}
+                            </div>
+                            <div class="preset-desc">{{ voice.reference_text|truncatechars:60 }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                    {% else %}
+                    <div class="no-preset">
+                        <i class="bi bi-mic display-6"></i>
+                        <p class="mt-2 mb-0">등록된 음성이 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 스톡 영상 간격 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-camera-video"></i> 스톡 영상 (Freepik)
+                </div>
+                <div class="preset-body">
+                    <p class="text-muted mb-3" style="font-size: 0.85em;">
+                        매 N번째 씬마다 AI 이미지 대신 Freepik 스톡 영상을 삽입합니다. 나레이션/자막은 유지됩니다.
+                    </p>
+                    <label class="preset-option selected">
+                        <input type="radio" name="freepik_interval" value="0" checked>
+                        <div class="preset-preview">
+                            <i class="bi bi-x-lg text-muted"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">사용 안함</div>
+                            <div class="preset-desc">모든 씬에 AI 생성 이미지 사용</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="1">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video-fill text-warning"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">100% 스톡</div>
+                            <div class="preset-desc">모든 씬에 스톡 영상 사용 (이미지 생성 불필요)</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="2">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-info"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">매 2씬</div>
+                            <div class="preset-desc">2, 4, 6, 8... 번째 씬에 삽입 (많음)</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="3">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-info"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">매 3씬</div>
+                            <div class="preset-desc">2, 5, 8, 11... 번째 씬에 삽입</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="4">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-primary"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                매 4씬 <span class="badge bg-success">권장</span>
+                            </div>
+                            <div class="preset-desc">2, 6, 10, 14... 번째 씬에 삽입</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="5">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-info"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">매 5씬</div>
+                            <div class="preset-desc">2, 7, 12, 17... 번째 씬에 삽입</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="6">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-info"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">매 6씬</div>
+                            <div class="preset-desc">2, 8, 14, 20... 번째 씬에 삽입</div>
+                        </div>
+                    </label>
+                    <label class="preset-option">
+                        <input type="radio" name="freepik_interval" value="8">
+                        <div class="preset-preview">
+                            <i class="bi bi-camera-video text-info"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">매 8씬</div>
+                            <div class="preset-desc">2, 10, 18, 26... 번째 씬에 삽입</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 썸네일 스타일 선택 -->
+            <div class="preset-card">
+                <div class="preset-header">
+                    <i class="bi bi-card-image"></i> 썸네일 스타일
+                </div>
+                <div class="preset-body">
+                    {% if thumbnail_styles %}
+                    <label class="preset-option {% if not thumbnail_styles_has_default %}selected{% endif %}">
+                        <input type="radio" name="thumbnail_style" value="" {% if not thumbnail_styles_has_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            <i class="bi bi-x-lg text-muted"></i>
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">선택 안함</div>
+                            <div class="preset-desc">기본 썸네일 스타일 사용</div>
+                        </div>
+                    </label>
+
+                    {% for style in thumbnail_styles %}
+                    <label class="preset-option {% if style.is_default %}selected{% endif %}">
+                        <input type="radio" name="thumbnail_style" value="{{ style.pk }}"
+                               {% if style.is_default %}checked{% endif %}>
+                        <div class="preset-preview">
+                            {% if style.example_image %}
+                            <img src="{{ style.example_image.url }}" alt="">
+                            {% else %}
+                            <i class="bi bi-card-image text-muted"></i>
+                            {% endif %}
+                        </div>
+                        <div class="preset-info">
+                            <div class="preset-name">
+                                {{ style.name }}
+                                <span class="badge bg-secondary">{{ style.get_style_type_display }}</span>
+                                {% if style.is_default %}<span class="badge bg-primary default-badge">기본</span>{% endif %}
+                            </div>
+                            <div class="preset-desc">{{ style.prompt_template|truncatechars:80 }}</div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                    {% else %}
+                    <div class="no-preset">
+                        <i class="bi bi-card-image display-6"></i>
+                        <p class="mt-2 mb-0">등록된 썸네일 스타일이 없습니다.<br><a href="{% url 'accounts:settings' %}">설정에서 추가</a></p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="d-flex gap-2 mb-4">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    <i class="bi bi-check-lg"></i> 프로젝트 생성
+                </button>
+                <a href="{% url 'pipeline:dashboard' %}" class="btn btn-outline-secondary btn-lg">
+                    <i class="bi bi-x-lg"></i> 취소
+                </a>
+            </div>
+        </form>
+
+        <div class="alert alert-info mb-4">
+            <i class="bi bi-info-circle"></i>
+            <strong>프리셋 관리:</strong>
+            <a href="{% url 'accounts:settings' %}" class="ms-2">설정 페이지</a>에서 이미지 스타일, 캐릭터, TTS 음성 프리셋을 추가/삭제할 수 있습니다.
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 라디오 버튼 선택 시 카드 스타일 변경
+document.querySelectorAll('.preset-option input[type="radio"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+        const name = this.name;
+        document.querySelectorAll(`input[name="${name}"]`).forEach(r => {
+            r.closest('.preset-option').classList.remove('selected');
+        });
+        this.closest('.preset-option').classList.add('selected');
+    });
+});
+</script>
 {% endblock %}

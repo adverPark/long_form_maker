@@ -71,18 +71,59 @@ def dashboard(request):
 
 @login_required
 def project_create(request):
-    """새 프로젝트 생성"""
+    """새 프로젝트 생성 (설정 포함)"""
     if request.method == 'POST':
         name = request.POST.get('name', '').strip()
         if not name:
             messages.error(request, '프로젝트 이름을 입력해주세요.')
-            return redirect('pipeline:dashboard')
+            return redirect('pipeline:project_create')
 
         project = Project.objects.create(user=request.user, name=name)
+
+        # 이미지 모델 선택
+        image_model = request.POST.get('image_model')
+        if image_model in dict(Project.IMAGE_MODEL_CHOICES):
+            project.image_model = image_model
+
+        # 프리셋 선택 저장
+        image_style_id = request.POST.get('image_style')
+        character_id = request.POST.get('character')
+        voice_id = request.POST.get('voice')
+        thumbnail_style_id = request.POST.get('thumbnail_style')
+
+        # 스톡 영상 간격
+        freepik_interval = request.POST.get('freepik_interval', '0')
+        try:
+            project.freepik_interval = int(freepik_interval)
+        except (ValueError, TypeError):
+            project.freepik_interval = 0
+
+        project.image_style_id = image_style_id if image_style_id else None
+        project.character_id = character_id if character_id else None
+        project.voice_id = voice_id if voice_id else None
+        project.thumbnail_style_id = thumbnail_style_id if thumbnail_style_id else None
+        project.save()
+
         messages.success(request, f'프로젝트 "{name}"가 생성되었습니다.')
         return redirect('pipeline:project_data', pk=project.pk)
 
-    return render(request, 'pipeline/project_create.html')
+    image_styles = ImageStylePreset.objects.filter(user=request.user)
+    characters = CharacterPreset.objects.filter(user=request.user)
+    voices = VoicePreset.objects.filter(user=request.user)
+    thumbnail_styles = ThumbnailStylePreset.objects.filter(user=request.user)
+
+    context = {
+        'image_model_choices': Project.IMAGE_MODEL_CHOICES,
+        'image_styles': image_styles,
+        'image_styles_has_default': image_styles.filter(is_default=True).exists(),
+        'characters': characters,
+        'characters_has_default': characters.filter(is_default=True).exists(),
+        'voices': voices,
+        'voices_has_default': voices.filter(is_default=True).exists(),
+        'thumbnail_styles': thumbnail_styles,
+        'thumbnail_styles_has_default': thumbnail_styles.filter(is_default=True).exists(),
+    }
+    return render(request, 'pipeline/project_create.html', context)
 
 
 @login_required
@@ -464,18 +505,28 @@ def project_data(request, pk):
     # 썸네일 스타일 목록 (업로드 정보에서 선택용)
     thumbnail_styles = ThumbnailStylePreset.objects.filter(user=request.user)
 
+    # 씬 총 길이 계산
+    from django.db.models import Sum
+    scenes = project.scenes.all()
+    total_duration = scenes.aggregate(Sum('audio_duration'))['audio_duration__sum'] or 0
+    total_minutes = int(total_duration // 60)
+    total_seconds = int(total_duration % 60)
+    total_duration_formatted = f'{total_minutes}분 {total_seconds}초'
+
     context = {
         'project': project,
         'topic': getattr(project, 'topic', None),
         'research': getattr(project, 'research', None),
         'draft': getattr(project, 'draft', None),
-        'scenes': project.scenes.all(),
+        'scenes': scenes,
         'steps': steps,
         'step_executions': step_executions,
         'total_tokens': total_tokens,
         'total_cost': total_cost,
         'running_executions': running_executions,  # 실행 중인 작업들 (여러 개)
         'thumbnail_styles': thumbnail_styles,
+        'total_duration': total_duration,
+        'total_duration_formatted': total_duration_formatted,
     }
     return render(request, 'pipeline/project_data.html', context)
 
@@ -948,6 +999,14 @@ def scene_generate_tts(request, pk, scene_number):
                 import logging
                 logging.info(f'씬 {scene_number} 오디오 잘림 감지 ({last_truncation_detail}), 시드 변경 재시도 {attempt + 2}/{max_attempts}')
 
+        # 오디오 길이 계산
+        import wave
+        try:
+            with wave.open(scene.audio.path, 'rb') as wav:
+                scene.audio_duration = wav.getnframes() / float(wav.getframerate())
+        except Exception:
+            scene.audio_duration = 0
+
         # 저장
         scene.subtitle_status = subtitle_status
         scene.subtitle_word_count = subtitle_word_count
@@ -961,6 +1020,7 @@ def scene_generate_tts(request, pk, scene_number):
             'subtitle_status': scene.subtitle_status,
             'subtitle_word_count': scene.subtitle_word_count,
             'narration_word_count': scene.narration_word_count,
+            'audio_duration': scene.audio_duration,
         }
         if subtitle_status == 'truncated':
             result['message'] = f'오디오 잘림 감지 ({last_truncation_detail}) - {max_attempts}회 시도 후에도 해결 안 됨'
@@ -1472,6 +1532,263 @@ def scene_delete(request, pk, scene_number):
 
 @login_required
 @require_POST
+def scene_add_after(request, pk, scene_number):
+    """현재 씬 다음에 빈 씬 추가"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+
+    new_number = scene_number + 1
+
+    # 이후 씬들 번호 +1 (역순으로 업데이트하여 unique constraint 충돌 방지)
+    later_scenes = project.scenes.filter(scene_number__gte=new_number).order_by('-scene_number')
+    for s in later_scenes:
+        s.scene_number = s.scene_number + 1
+        s.save(update_fields=['scene_number'])
+
+    # 새 씬 생성
+    Scene.objects.create(
+        project=project,
+        scene_number=new_number,
+        narration='',
+    )
+
+    return JsonResponse({
+        'success': True,
+        'new_scene_number': new_number,
+    })
+
+
+@login_required
+@require_POST
+def scene_bulk_upload_images(request, pk):
+    """파일명 숫자 기반 이미지 일괄 업로드"""
+    import io
+    import os
+    import re
+    from PIL import Image, ImageOps
+    from django.core.files.base import ContentFile
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    files = request.FILES.getlist('files')
+
+    if not files:
+        return JsonResponse({'success': False, 'message': '파일이 없습니다.'})
+
+    # 프로젝트 씬 번호 → 씬 객체 매핑
+    scene_map = {s.scene_number: s for s in project.scenes.all()}
+
+    uploaded = 0
+    skipped = 0
+    failed = 0
+    details = []
+
+    for f in files:
+        filename = f.name
+        # 파일명 앞 숫자 파싱
+        m = re.match(r'^(\d+)', filename)
+        if not m:
+            skipped += 1
+            details.append(f'{filename}: 숫자 없음')
+            continue
+
+        num = int(m.group(1))
+        scene = scene_map.get(num)
+        if not scene:
+            skipped += 1
+            details.append(f'{filename}: 씬 {num} 없음')
+            continue
+
+        content_type = f.content_type or ''
+        if not content_type.startswith('image/'):
+            skipped += 1
+            details.append(f'{filename}: 이미지 아님')
+            continue
+
+        try:
+            # 기존 이미지 삭제
+            if scene.image:
+                try:
+                    if os.path.exists(scene.image.path):
+                        os.remove(scene.image.path)
+                except Exception:
+                    pass
+
+            # 기존 스톡 영상 삭제 (이미지로 교체)
+            if scene.stock_video:
+                try:
+                    if os.path.exists(scene.stock_video.path):
+                        os.remove(scene.stock_video.path)
+                except Exception:
+                    pass
+                scene.stock_video = ''
+
+            # 1920x1080 리사이즈
+            img = Image.open(f)
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            img = ImageOps.fit(img, (1920, 1080), method=Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            buffer.seek(0)
+
+            scene.image.save(f'scene_{num:02d}.png', ContentFile(buffer.read()), save=True)
+            uploaded += 1
+        except Exception as e:
+            failed += 1
+            details.append(f'{filename}: {str(e)}')
+
+    return JsonResponse({
+        'success': True,
+        'uploaded': uploaded,
+        'skipped': skipped,
+        'failed': failed,
+        'message': f'업로드 {uploaded}개 완료, 건너뜀 {skipped}개, 실패 {failed}개',
+        'details': details,
+    })
+
+
+@login_required
+@require_POST
+def scene_reorder(request, pk, scene_number):
+    """씬 순서 이동 (scene_number → new_number)"""
+    import json
+    from django.db import transaction
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+
+    try:
+        body = json.loads(request.body)
+        new_number = int(body.get('new_number', 0))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return JsonResponse({'success': False, 'message': '잘못된 요청입니다.'})
+
+    if new_number < 1:
+        return JsonResponse({'success': False, 'message': '씬 번호는 1 이상이어야 합니다.'})
+
+    total_scenes = project.scenes.count()
+    if new_number > total_scenes:
+        return JsonResponse({'success': False, 'message': f'씬 번호는 {total_scenes} 이하여야 합니다.'})
+
+    if scene_number == new_number:
+        return JsonResponse({'success': True, 'message': '변경 없음'})
+
+    scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
+
+    with transaction.atomic():
+        # 1단계: 대상 씬을 임시 번호(0)로 이동
+        Scene.objects.filter(pk=scene.pk).update(scene_number=0)
+
+        # 2단계: 영향 받는 씬들 shift
+        if new_number < scene_number:
+            # 위로 이동: new_number ~ scene_number-1 → +1 (역순)
+            affected = project.scenes.filter(
+                scene_number__gte=new_number,
+                scene_number__lt=scene_number
+            ).order_by('-scene_number')
+            for s in affected:
+                Scene.objects.filter(pk=s.pk).update(scene_number=s.scene_number + 1)
+        else:
+            # 아래로 이동: scene_number+1 ~ new_number → -1 (정순)
+            affected = project.scenes.filter(
+                scene_number__gt=scene_number,
+                scene_number__lte=new_number
+            ).order_by('scene_number')
+            for s in affected:
+                Scene.objects.filter(pk=s.pk).update(scene_number=s.scene_number - 1)
+
+        # 3단계: 대상 씬을 최종 위치로
+        Scene.objects.filter(pk=scene.pk).update(scene_number=new_number)
+
+    return JsonResponse({
+        'success': True,
+        'message': f'씬 {scene_number} → {new_number} 이동 완료',
+    })
+
+
+@login_required
+@require_POST
+def scene_upload_media(request, pk, scene_number):
+    """씬별 이미지/영상 수동 업로드"""
+    import io
+    import os
+    from PIL import Image, ImageOps
+    from django.core.files.base import ContentFile
+
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
+
+    file = request.FILES.get('file')
+    if not file:
+        return JsonResponse({'success': False, 'message': '파일이 없습니다.'})
+
+    content_type = file.content_type or ''
+
+    if content_type.startswith('image/'):
+        # 기존 이미지 삭제
+        if scene.image:
+            try:
+                if os.path.exists(scene.image.path):
+                    os.remove(scene.image.path)
+            except Exception:
+                pass
+
+        # 기존 스톡 영상도 삭제 (이미지로 교체하므로)
+        if scene.stock_video:
+            try:
+                if os.path.exists(scene.stock_video.path):
+                    os.remove(scene.stock_video.path)
+            except Exception:
+                pass
+            scene.stock_video = ''
+
+        # 1920x1080 리사이즈
+        img = Image.open(file)
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+        img = ImageOps.fit(img, (1920, 1080), method=Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        scene.image.save(f'scene_{scene_number:02d}.png', ContentFile(buffer.read()), save=True)
+
+        return JsonResponse({
+            'success': True,
+            'media_type': 'image',
+            'url': scene.image.url,
+        })
+
+    elif content_type.startswith('video/'):
+        # 기존 영상 삭제
+        if scene.stock_video:
+            try:
+                if os.path.exists(scene.stock_video.path):
+                    os.remove(scene.stock_video.path)
+            except Exception:
+                pass
+
+        # 기존 이미지도 삭제 (영상으로 교체하므로)
+        if scene.image:
+            try:
+                if os.path.exists(scene.image.path):
+                    os.remove(scene.image.path)
+            except Exception:
+                pass
+            scene.image = ''
+
+        ext = os.path.splitext(file.name)[1] or '.mp4'
+        scene.stock_video.save(f'scene_{scene_number:02d}{ext}', file, save=True)
+
+        return JsonResponse({
+            'success': True,
+            'media_type': 'video',
+            'url': scene.stock_video.url,
+        })
+
+    return JsonResponse({'success': False, 'message': '이미지 또는 영상 파일만 업로드 가능합니다.'})
+
+
+@login_required
+@require_POST
 def delete_final_video(request, pk):
     """영상 제작 관련 파일 전체 삭제 (초기화)"""
     import os
@@ -1780,7 +2097,7 @@ def generate_upload_info(request, pk):
         for s in scene_info_list:
             mins = int(s['time'] // 60)
             secs = int(s['time'] % 60)
-            scenes_text += f"[{mins}:{secs:02d}] 씬{s['scene']} ({s['section']}): {s['narration']}\n"
+            scenes_text += f"[{mins:02d}:{secs:02d}] 씬{s['scene']} ({s['section']}): {s['narration']}\n"
 
         total_mins = int(total_duration // 60)
         total_secs = int(total_duration % 60)
@@ -1806,21 +2123,29 @@ def generate_upload_info(request, pk):
 
 ## 생성해주세요
 
-1. **제목** (50자 이내): 클릭 유도하는 매력적인 제목
+1. **제목** (50자 이내):
+   - 대본 계획의 "선택한 욕구"를 기반으로 시청자가 반드시 클릭하고 싶은 제목
+   - 욕구의 공포, 호기심, 분노, 의문 등 감정을 자극할 것
+   - 예시 패턴: "~하는데 ~라고?", "~의 소름 돋는 진실", "~전에 반드시 알아야 할 것"
 2. **설명**: 훅(1-2문장) + 요약(3-4문장) + 구독 요청
 3. **타임라인**: 섹션별 시작 시간 + 내용 기반 제목 (10자 이내)
    - intro, body_1, body_2, body_3, action, outro 각각
    - "본론 1" 같은 의미없는 제목 금지!
+4. **태그**: YouTube 검색 최적화용 키워드 10~15개
+   - 영상 핵심 주제를 나타내는 2~4글자 명사/키워드
+   - 예: ["AI", "해고", "미국경제", "빅테크", "주가", "일자리", "로봇", "자동화"]
+   - 조사 붙은 단어 금지 (X: "해고는", "주가가" → O: "해고", "주가")
 
 JSON 형식:
 {{
     "title": "영상 제목",
     "description": "훅\\n\\n요약\\n\\n📌 구독과 좋아요 부탁드려요!\\n🔔 알림 설정하세요!",
     "timeline": [
-        {{"time": "0:00", "title": "시작 제목"}},
-        {{"time": "1:16", "title": "다음 제목"}},
+        {{"time": "00:00", "title": "시작 제목"}},
+        {{"time": "01:16", "title": "다음 제목"}},
         ...
-    ]
+    ],
+    "tags": ["키워드1", "키워드2", ...]
 }}
 
 주의: JSON만 응답 (```json 없이)"""
@@ -1880,20 +2205,68 @@ JSON 형식:
             'message': f'업로드 정보 생성 실패: {str(e)[:200]}'
         })
 
-    # 태그 생성 (19금 키워드 제외)
+    # 태그: LLM 응답에서 가져오기
     excluded_keywords = {'유흥', '술집', '노래방', '호프', '소주', '맥주', '주류', '성인'}
-    tags = []
+    llm_tags = result.get('tags', [])
+    if llm_tags and isinstance(llm_tags, list):
+        info.tags = [t for t in llm_tags if t not in excluded_keywords][:15]
+    else:
+        # 폴백: 제목에서 추출
+        tags = []
+        if info.title:
+            words = re.findall(r'[가-힣]+', info.title)
+            for word in words:
+                if len(word) >= 2 and word not in excluded_keywords and word not in tags:
+                    tags.append(word)
+                    if len(tags) >= 15:
+                        break
+        info.tags = tags[:15]
 
-    # 제목에서 키워드 추출
-    if info.title:
-        words = re.findall(r'[가-힣]+', info.title)
-        for word in words:
-            if len(word) >= 2 and word not in excluded_keywords and word not in tags:
-                tags.append(word)
-                if len(tags) >= 15:
-                    break
+    # 참고자료 생성 (리서치 출처 기반)
+    try:
+        research_text = ''
+        try:
+            research_obj = project.research
+            if research_obj:
+                if research_obj.content_analysis and research_obj.content_analysis.get('research_result'):
+                    research_text = research_obj.content_analysis['research_result']
+                if not research_text and research_obj.article_summaries:
+                    for item in research_obj.article_summaries:
+                        summary = item.get('summary', '')
+                        if summary:
+                            research_text += summary + '\n\n'
+                if research_obj.manual_notes:
+                    research_text += '\n' + research_obj.manual_notes
+        except Research.DoesNotExist:
+            pass
 
-    info.tags = tags[:15]
+        if research_text.strip():
+            ref_prompt = f"""아래 리서치 자료에서 참고자료 목록을 만들어주세요.
+
+리서치 내용:
+{research_text[:5000]}
+
+규칙:
+- 각 섹션의 제목과 출처를 한 줄로 정리
+- 형식: "섹션 제목 - 출처1, 출처2, ..."
+- "출처:" 라인에 있는 출처명을 그대로 사용
+- 출처가 없는 섹션은 제외
+- 번호 없이, 줄바꿈으로 구분
+- 설명이나 부연 없이 목록만 출력
+
+예시:
+AI 도입으로 인한 생산성 향상 수치 - Klarna Press Release, Amazon Q Announcement, GitHub Blog
+빅테크 기업 주가 추이 - Nasdaq, Economic Times, Forbes"""
+
+            ref_response = client.models.generate_content(
+                model=MODELS.get('2.5-flash', model_name),
+                contents=ref_prompt
+            )
+            info.references = ref_response.text.strip()
+        else:
+            info.references = ''
+    except Exception:
+        info.references = ''
 
     # 썸네일 프롬프트 생성 (LLM으로 별도 생성)
     try:
@@ -1901,14 +2274,26 @@ JSON 형식:
         intro_narrations = [s['narration'] for s in scene_info_list[:5]]
         intro_text = ' '.join(intro_narrations)[:500]
 
+        # 욕구 정보 추출
+        desires_text = ''
+        try:
+            r = project.research
+            if r and r.content_analysis:
+                sp = r.content_analysis.get('script_plan', '')
+                if sp and '선택한 욕구' in str(sp):
+                    desires_text = f"\n시청자 핵심 욕구 (대본 계획 기반):\n{str(sp)[:500]}"
+        except Exception:
+            pass
+
         thumb_prompt = f"""YouTube 썸네일 이미지 생성 프롬프트를 영어로 작성해주세요.
 
 영상 제목: {info.title}
 영상 시작 내용: {intro_text}
+{desires_text}
 
 요구사항:
-1. 클릭을 유도하는 강렬한 이미지
-2. 한글 텍스트 10자 이내 포함
+1. 시청자의 공포/호기심/분노를 자극하는 강렬한 이미지
+2. 한글 텍스트 10자 이내 포함 (욕구에서 가장 자극적인 키워드 활용)
 3. 영상 주제와 관련된 시각적 요소
 4. 감정: 충격, 호기심, 긴박감 중 택1
 

@@ -554,6 +554,9 @@ class UploadInfo(models.Model):
     # 썸네일 프롬프트
     thumbnail_prompt = models.TextField(blank=True, verbose_name="썸네일 프롬프트")
 
+    # 참고자료 (리서치 출처 기반 자동 생성)
+    references = models.TextField(blank=True, verbose_name="참고자료")
+
     # 메타 정보
     category_id = models.CharField(max_length=10, default='25', verbose_name="카테고리 ID")
     category_name = models.CharField(max_length=50, default='News & Politics', verbose_name="카테고리명")
@@ -580,6 +583,11 @@ class UploadInfo(models.Model):
             parts.append("\n\n⏱️ 타임라인")
             for item in self.timeline:
                 parts.append(f"{item['time']} {item['title']}")
+
+        # 면책문구 + 참고자료
+        parts.append("\n\n해당 영상은 투자를 권장하는 목적이 아니라 교육 목적으로 제작되었습니다.")
+        if self.references:
+            parts.append(f"\n📚 참고자료\n{self.references}")
 
         # 해시태그 추가
         if self.tags:
