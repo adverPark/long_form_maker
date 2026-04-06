@@ -151,7 +151,7 @@ class TTSGeneratorService(BaseStepService):
         return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
 
     def _check_audio_truncation(self, srt_timings: list) -> tuple:
-        """오디오 잘림 감지 - 마지막 단어들의 duration이 비정상적으로 짧으면 잘림 판단
+        """오디오 잘림 감지 - 마지막 단어의 duration이 비정상적으로 짧으면 잘림 판단
 
         Returns:
             tuple: (is_truncated: bool, details: str)
@@ -159,22 +159,16 @@ class TTSGeneratorService(BaseStepService):
         if not srt_timings or len(srt_timings) < 2:
             return False, ''
 
-        # 마지막 3개 단어 검사
-        check_count = min(3, len(srt_timings))
-        truncated_words = []
+        # 마지막 단어만 검사 (중간 단어는 WhisperX가 짧게 잡을 수 있음)
+        last = srt_timings[-1]
+        start = self._time_to_seconds(last['start'])
+        end = self._time_to_seconds(last['end'])
+        duration = end - start
+        word = last['text']
 
-        for timing in srt_timings[-check_count:]:
-            start = self._time_to_seconds(timing['start'])
-            end = self._time_to_seconds(timing['end'])
-            duration = end - start
-            word = timing['text']
-
-            # 2글자 이상 단어인데 duration이 0.10초 미만이면 잘림 의심
-            if len(word) >= 2 and duration < 0.10:
-                truncated_words.append(f'{word}({duration:.3f}s)')
-
-        if truncated_words:
-            return True, ', '.join(truncated_words)
+        # 3글자 이상 단어인데 duration이 0.05초 미만이면 잘림
+        if len(word) >= 3 and duration < 0.05:
+            return True, f'{word}({duration:.3f}s)'
 
         return False, ''
 

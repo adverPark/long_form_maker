@@ -93,14 +93,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # ===========================================
 
     def _parse_srt_timings(self, srt_content: str) -> list:
-        """SRT에서 타이밍만 추출 (텍스트 무시!)"""
-        pattern = r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})'
+        """SRT에서 타이밍 + 텍스트 추출"""
+        pattern = r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.+?)(?=\n|$)'
         timings = []
 
         for match in re.finditer(pattern, srt_content):
             start = self._srt_time_to_seconds(match.group(1))
             end = self._srt_time_to_seconds(match.group(2))
-            timings.append({'start': start, 'end': end})
+            text = match.group(3).strip()
+            timings.append({'start': start, 'end': end, 'text': text})
 
         return timings
 
@@ -182,8 +183,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     self.log(f'씬 {scene_num} SRT 타이밍 없음', 'warning')
                     continue
 
-                # narration 단어에 타이밍 매핑
-                word_timings = self._map_timings_to_narration(timings, narration)
+                # SRT에서 이미 매핑된 텍스트+타이밍을 직접 사용
+                word_timings = [{'word': t['text'], 'start': t['start'], 'end': t['end']} for t in timings]
 
                 # 문장 단위로 그룹화 (마침표/물음표/느낌표에서 끊기)
                 sentences = self._group_words_to_sentences(word_timings)
