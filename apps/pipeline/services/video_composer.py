@@ -195,34 +195,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     elif dur < 0.15 and wi == len(word_timings) - 1:
                         wt['end'] = wt['start'] + 0.3
 
-                # SRT 단어 기준 문장 그룹화 (타이밍용)
-                srt_sentences = self._group_words_to_sentences(word_timings)
+                # 문장 그룹화 (SRT 텍스트 + 타이밍)
+                sentences = self._group_words_to_sentences(word_timings)
 
-                # narration 텍스트를 문장 단위로 분할 (표시용)
-                narration_sents = re.split(r'(?<=[.?!])\s+', narration.strip())
-                narration_sents = [s.strip() for s in narration_sents if s.strip()]
-                # 쉼표 분리도 적용 (SRT 그룹화와 맞추기 위해)
-                expanded_narr = []
-                for ns in narration_sents:
-                    if len(ns) > 25 and ',' in ns:
-                        parts = ns.split(',')
-                        for pi, p in enumerate(parts):
-                            p = p.strip()
-                            if pi < len(parts) - 1:
-                                p += ','
-                            if p:
-                                expanded_narr.append(p)
-                    else:
-                        expanded_narr.append(ns)
+                # narration에서 숫자 치환 맵 생성 (에이아이→AI, 백 개→100개 등)
+                tts_to_narr = {}
+                narr_words = narration.split()
+                tts_words = (scene.narration_tts or narration).split()
+                if len(narr_words) != len(tts_words):
+                    # 단어 수 다르면 치환 안 함 (SRT 텍스트 그대로 사용)
+                    pass
+                else:
+                    for nw, tw in zip(narr_words, tts_words):
+                        if nw != tw:
+                            tts_to_narr[tw] = nw
 
-                # ASS 파일 생성 - SRT 타이밍 + narration 텍스트
+                # ASS 파일 생성 - SRT 타이밍 + SRT 텍스트 (숫자만 치환)
                 ass_content = self.ASS_HEADER
-                for si, s in enumerate(srt_sentences):
-                    # narration 문장이 있으면 사용, 없으면 SRT 텍스트
-                    if si < len(expanded_narr):
-                        display_text = expanded_narr[si]
-                    else:
-                        display_text = s['text']
+                for s in sentences:
+                    display_text = s['text']
+                    # 숫자 치환 적용
+                    for tts_w, narr_w in tts_to_narr.items():
+                        display_text = display_text.replace(tts_w, narr_w)
                     highlighted = self._highlight_numbers(display_text)
                     start = self._format_ass_time(s['start'])
                     end = self._format_ass_time(s['end'])
