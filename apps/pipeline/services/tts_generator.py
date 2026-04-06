@@ -132,8 +132,8 @@ class TTSGeneratorService(BaseStepService):
                 # 원본 단어로 교체
                 word = narration_words[i]
             else:
-                # SRT가 더 길면 원래 텍스트 유지
-                word = timing["text"]
+                # SRT가 narration보다 길면 초과분 무시 (중복 방지)
+                continue
 
             mapped_entries.append(
                 f'{i + 1}\n{timing["start"]} --> {timing["end"]}\n{word}\n'
@@ -265,7 +265,7 @@ class TTSGeneratorService(BaseStepService):
                 # scene, tts_text, original_narration 튜플
                 future_to_scene = {
                     executor.submit(
-                        self._generate_tts, tts_text, voice, ref_audio_b64, ref_text
+                        self._generate_tts_by_sentence, tts_text, voice, ref_audio_b64, ref_text
                     ): (scene, tts_text, original_narration)
                     for scene, tts_text, original_narration in batch
                 }
@@ -412,7 +412,7 @@ class TTSGeneratorService(BaseStepService):
                 )
 
                 # TTS 재생성 (시드 변경 + 캐시 비활성화)
-                result = self._generate_tts(retry_tts_text, voice, ref_audio_b64, ref_text, seed_override=retry_seed, disable_cache=True)
+                result = self._generate_tts_by_sentence(retry_tts_text, voice, ref_audio_b64, ref_text, seed_override=retry_seed, disable_cache=True)
                 if not result:
                     self.log(f'씬 {scene_num} 재생성 실패', 'error')
                     error_count += 1
@@ -522,6 +522,102 @@ class TTSGeneratorService(BaseStepService):
         else:
             self.update_progress(100, f'완료: {success_count}개 생성, {skip_count}개 스킵')
 
+
+    def _generate_tts_by_sentence(self, text: str, voice, ref_audio_b64: str, ref_text: str, seed_override: int = None, disable_cache: bool = False) -> tuple:
+        """문장 단위 TTS 생성 후 합치기 (잘림 방지)
+        
+        각 문장을 tts_wrapper(9881)에 개별 호출하여 WAV+SRT를 받고,
+        WAV PCM을 이어붙이고 SRT에 cumulative offset을 더해서 합침.
+        WhisperX 재분석 불필요 (각 문장의 SRT가 이미 정확).
+        """
+        import re as _re
+        import wave
+        
+        # 문장 분리 (. ? ! 기준)
+        sentences = _re.split(r'(?<=[.?!])\s+', text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # 1문장이면 기존 방식
+        if len(sentences) <= 1:
+            return self._generate_tts(text, voice, ref_audio_b64, ref_text, seed_override, disable_cache)
+        
+        self._thread_log(f'  문장 분리: {len(sentences)}개 문장으로 TTS 생성')
+        
+        all_pcm = []
+        all_srt_entries = []
+        cumulative_time = 0.0
+        srt_idx = 1
+        wav_params = None
+        
+        def parse_srt_time(t):
+            h, m, rest = t.strip().split(':')
+            s, ms = rest.split(',')
+            return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+        
+        def format_srt_time(sec):
+            h = int(sec // 3600)
+            m = int((sec % 3600) // 60)
+            s = int(sec % 60)
+            ms = int((sec % 1) * 1000)
+            return f'{h:02d}:{m:02d}:{s:02d},{ms:03d}'
+        
+        for i, sentence in enumerate(sentences):
+            if not sentence:
+                continue
+            
+            result = self._generate_tts(sentence, voice, ref_audio_b64, ref_text, seed_override, disable_cache)
+            if result is None:
+                self._thread_log(f'  문장 {i+1} TTS 실패: {sentence[:30]}', 'error')
+                return None
+            
+            audio_data, srt_data = result
+            
+            # WAV PCM 추출 + 길이 계산
+            all_pcm.append(audio_data[44:])
+            wav_buf = io.BytesIO(audio_data)
+            with wave.open(wav_buf, 'rb') as wf:
+                duration = wf.getnframes() / float(wf.getframerate())
+                if i == 0:
+                    wav_params = wf.getparams()
+            
+            # SRT에 cumulative offset 더하기
+            if srt_data:
+                srt_text = srt_data.decode('utf-8')
+                for block in srt_text.strip().split('\n\n'):
+                    lines = block.strip().split('\n')
+                    if len(lines) >= 3 and ' --> ' in lines[1]:
+                        timing = lines[1]
+                        word = lines[2]
+                        start_str, end_str = timing.split(' --> ')
+                        start = parse_srt_time(start_str) + cumulative_time
+                        end = parse_srt_time(end_str) + cumulative_time
+                        all_srt_entries.append(f'{srt_idx}\n{format_srt_time(start)} --> {format_srt_time(end)}\n{word}')
+                        srt_idx += 1
+            else:
+                # fallback: SRT 없으면 문장 전체를 하나의 블록으로
+                all_srt_entries.append(f'{srt_idx}\n{format_srt_time(cumulative_time)} --> {format_srt_time(cumulative_time + duration)}\n{sentence}')
+                srt_idx += 1
+                self._thread_log(f'  문장 {i+1} SRT 없음 - fallback 적용', 'warning')
+            
+            cumulative_time += duration
+        
+        if not all_pcm or not wav_params:
+            return None
+        
+        # WAV 합치기
+        merged_pcm = b''.join(all_pcm)
+        merged_wav_buf = io.BytesIO()
+        with wave.open(merged_wav_buf, 'wb') as wf:
+            wf.setparams(wav_params)
+            wf.writeframes(merged_pcm)
+        merged_audio = merged_wav_buf.getvalue()
+        
+        merged_srt = '\n\n'.join(all_srt_entries).encode('utf-8') if all_srt_entries else None
+        
+        self._thread_log(f'  문장 합치기 완료: {len(sentences)}개 문장, 총 {cumulative_time:.1f}초, SRT {srt_idx-1}개')
+        
+        return (merged_audio, merged_srt)
+
     def _generate_tts(self, text: str, voice, ref_audio_b64: str, ref_text: str, seed_override: int = None, disable_cache: bool = False) -> tuple:
         """Fish Speech API로 TTS 생성 (재시도 포함)
 
@@ -539,7 +635,8 @@ class TTSGeneratorService(BaseStepService):
             'text': text,
             'format': 'wav',
             'use_memory_cache': 'off' if disable_cache else 'on',
-            'max_new_tokens': 2048,
+            'max_new_tokens': 4096,
+            'chunk_length': 300,
         }
 
         # 프리셋 파라미터

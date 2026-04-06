@@ -414,6 +414,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 '-filter_complex', f'[0:v]{base_filter}[v]',
                 '-map', '[v]', '-map', '1:a',
                 '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
+                '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
                 '-c:a', 'aac', '-b:a', '192k',
                 '-t', str(duration),  # 오디오 길이로 자르기
                 str(output_path)
@@ -427,6 +428,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 '-filter_complex', f'[0:v]{base_filter}[v]',
                 '-map', '[v]', '-map', '1:a',
                 '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
+                '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
                 '-c:a', 'aac', '-b:a', '192k',
                 '-t', str(duration),
                 str(output_path)
@@ -461,6 +463,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             '-filter_complex', f'[0:v]{filter_complex}[v]',
             '-map', '[v]', '-map', '1:a',
             '-c:v', 'h264_nvenc', '-preset', 'fast', '-cq', '18',
+            '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
             '-c:a', 'aac', '-b:a', '192k',
             '-t', str(duration),
             str(output_path)

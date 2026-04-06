@@ -960,7 +960,9 @@ def scene_generate_tts(request, pk, scene_number):
                                 narration_words = clean_narration.split()
                                 mapped_entries = []
                                 for i, timing in enumerate(srt_timings):
-                                    word = narration_words[i] if i < len(narration_words) else timing["text"]
+                                    if i >= len(narration_words):
+                                        continue  # SRT가 narration보다 길면 초과분 무시
+                                    word = narration_words[i]
                                     mapped_entries.append(
                                         f'{i + 1}\n{timing["start"]} --> {timing["end"]}\n{word}\n'
                                     )
