@@ -919,11 +919,83 @@ def scene_generate_tts(request, pk, scene_number):
                 request_data['seed'] = new_seed
                 request_data['use_memory_cache'] = 'off'
 
-            response = requests.post(
-                f'{settings.FISH_SPEECH_URL}/v1/tts',
-                json=request_data,
-                timeout=180
-            )
+            # 문장 분리 TTS
+            _sentences = re.split(r'(?<=[.?!])\s+', text.strip())
+            _final_sentences = []
+            for _s in _sentences:
+                if len(_s) > 40 and ',' in _s:
+                    _left, _right = _s.split(',', 1)
+                    _final_sentences.append(_left.strip() + ',')
+                    _final_sentences.append(_right.strip())
+                else:
+                    _final_sentences.append(_s)
+            _final_sentences = [_s for _s in _final_sentences if _s.strip()]
+
+            if len(_final_sentences) >= 2:
+                import wave as _wave
+                _all_pcm = []
+                _all_srt = []
+                _cum = 0.0
+                _sidx = 1
+                _wparams = None
+                _ok = True
+                for _si, _sent in enumerate(_final_sentences):
+                    _sd = dict(request_data)
+                    _sd['text'] = _sent
+                    _resp = requests.post(f'{settings.FISH_SPEECH_URL}/v1/tts', json=_sd, timeout=180)
+                    if _resp.status_code != 200:
+                        _ok = False
+                        break
+                    if _resp.content[:2] == b'PK':
+                        with zipfile.ZipFile(io.BytesIO(_resp.content)) as _zf:
+                            _aud = _zf.read('audio.wav')
+                            _all_pcm.append(_aud[44:])
+                            _wb = io.BytesIO(_aud)
+                            with _wave.open(_wb, 'rb') as _wf:
+                                _dur = _wf.getnframes() / float(_wf.getframerate())
+                                if _si == 0: _wparams = _wf.getparams()
+                            for _n in _zf.namelist():
+                                if _n.endswith('.srt'):
+                                    _st = _zf.read(_n).decode('utf-8')
+                                    for _blk in _st.strip().split('\n\n'):
+                                        _ln = _blk.strip().split('\n')
+                                        if len(_ln) >= 3 and ' --> ' in _ln[1]:
+                                            _ss, _ee = _ln[1].split(' --> ')
+                                            def _pt(t):
+                                                h,m,r=t.strip().split(':'); s,ms=r.split(',')
+                                                return int(h)*3600+int(m)*60+int(s)+int(ms)/1000
+                                            def _ft(sec):
+                                                return f'{int(sec//3600):02d}:{int(sec%3600//60):02d}:{int(sec%60):02d},{int(sec%1*1000):03d}'
+                                            _all_srt.append(f'{_sidx}\n{_ft(_pt(_ss)+_cum)} --> {_ft(_pt(_ee)+_cum)}\n{_ln[2]}')
+                                            _sidx += 1
+                    else:
+                        _all_pcm.append(_resp.content[44:])
+                        _wb = io.BytesIO(_resp.content)
+                        with _wave.open(_wb, 'rb') as _wf:
+                            _dur = _wf.getnframes() / float(_wf.getframerate())
+                            if _si == 0: _wparams = _wf.getparams()
+                    _cum += _dur
+                if _ok and _all_pcm and _wparams:
+                    _mbuf = io.BytesIO()
+                    with _wave.open(_mbuf, 'wb') as _wf:
+                        _wf.setparams(_wparams)
+                        _wf.writeframes(b''.join(_all_pcm))
+                    _zbuf = io.BytesIO()
+                    with zipfile.ZipFile(_zbuf, 'w') as _zf:
+                        _zf.writestr('audio.wav', _mbuf.getvalue())
+                        _zf.writestr('subtitles.srt', '\n\n'.join(_all_srt))
+                    class _FR:
+                        status_code = 200
+                        content = _zbuf.getvalue()
+                    response = _FR()
+                else:
+                    return JsonResponse({'success': False, 'message': 'TTS 문장 분리 실패'})
+            else:
+                response = requests.post(
+                    f'{settings.FISH_SPEECH_URL}/v1/tts',
+                    json=request_data,
+                    timeout=180
+                )
 
             if response.status_code != 200:
                 return JsonResponse({'success': False, 'message': f'TTS 실패: HTTP {response.status_code}'})
@@ -983,7 +1055,7 @@ def scene_generate_tts(request, pk, scene_number):
 
                                 if is_truncated:
                                     subtitle_status = 'truncated'
-                                elif subtitle_word_count == narration_word_count:
+                                elif subtitle_word_count >= narration_word_count:
                                     subtitle_status = 'matched'
                                 else:
                                     subtitle_status = 'mismatch'

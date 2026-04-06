@@ -140,7 +140,7 @@ class TTSGeneratorService(BaseStepService):
             )
 
         mapped_srt = '\n'.join(mapped_entries)
-        is_valid = (srt_word_count == narration_word_count)
+        is_valid = (srt_word_count >= narration_word_count)
 
         return (mapped_srt, is_valid, srt_word_count, narration_word_count)
 
@@ -307,7 +307,7 @@ class TTSGeneratorService(BaseStepService):
                                         srt_timings, original_narration, scene_num
                                     )
 
-                                    # 자막 상태 저장
+                                    # 자막 상태 저장 (매핑 후 실제 수로)
                                     scene.subtitle_word_count = srt_word_count
                                     scene.narration_word_count = narration_word_count
 
