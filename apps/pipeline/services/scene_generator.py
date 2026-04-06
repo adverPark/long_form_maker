@@ -104,6 +104,9 @@ class SceneGeneratorService(BaseStepService):
                 self.log(f'스톡 영상 대상 씬 {len(stock_scene_numbers)}개 건너뜀: {sorted(stock_scene_numbers)}')
 
         for scene in scenes:
+            # visual_type이 있으면 image 타입만 처리
+            if hasattr(scene, 'visual_type') and scene.visual_type and scene.visual_type != 'image':
+                continue
             if scene.scene_number in stock_scene_numbers:
                 continue
 

@@ -67,6 +67,9 @@ class ImagePrompterService(BaseStepService):
         for scene in all_scenes:
             if not scene.narration:
                 continue
+            # visual_type이 있으면 image 타입만 처리
+            if hasattr(scene, 'visual_type') and scene.visual_type and scene.visual_type != 'image':
+                continue
             if scene.scene_number in stock_scene_numbers:
                 continue
             prompt = scene.image_prompt or ''

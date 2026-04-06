@@ -1063,6 +1063,13 @@ def scene_edit(request, pk, scene_number):
         scene.has_character = request.POST.get('has_character') in ['true', 'True', '1', 'on']
         updated_fields.append('has_character')
 
+    # visual_type 업데이트
+    if 'visual_type' in request.POST:
+        visual_type = request.POST.get('visual_type', '').strip()
+        if visual_type in ['slide', 'image', 'stock_video']:
+            scene.visual_type = visual_type
+            updated_fields.append('visual_type')
+
     # regenerate_tts: 나레이션 변경 없이 TTS 텍스트만 재생성
     if 'regenerate_tts' in request.POST and 'narration' not in request.POST:
         if scene.narration:
@@ -1082,6 +1089,40 @@ def scene_edit(request, pk, scene_number):
 
 @login_required
 @require_POST
+
+
+@login_required
+@require_POST
+def bulk_stock_by_visual_type(request, pk):
+    """visual_type='stock_video'인 씬들에 일괄 스톡 영상 적용"""
+    project = get_object_or_404(Project, pk=pk, user=request.user)
+    scenes = Scene.objects.filter(project=project, visual_type='stock_video', stock_video='').order_by('scene_number')
+
+    if not scenes.exists():
+        return JsonResponse({'success': False, 'message': '스톡 영상이 필요한 씬이 없습니다.'})
+
+    results = []
+    for scene in scenes:
+        try:
+            # 기존 개별 스톡 영상 로직 재사용 (내부 호출)
+            from django.test import RequestFactory
+            factory = RequestFactory()
+            fake_request = factory.post(f'/project/{pk}/scene/{scene.scene_number}/generate-stock-video/')
+            fake_request.user = request.user
+            response = scene_generate_stock_video(fake_request, pk, scene.scene_number)
+            import json
+            data = json.loads(response.content)
+            results.append({'scene': scene.scene_number, 'success': data.get('success', False), 'message': data.get('message', '')})
+        except Exception as e:
+            results.append({'scene': scene.scene_number, 'success': False, 'message': str(e)})
+
+    success_count = sum(1 for r in results if r['success'])
+    return JsonResponse({
+        'success': True,
+        'message': f'{success_count}/{len(results)}개 씬 스톡 영상 완료',
+        'results': results
+    })
+
 def scene_generate_stock_video(request, pk, scene_number):
     """개별 씬 스톡 영상 검색/다운로드 (Freepik)"""
     import re
@@ -1089,18 +1130,17 @@ def scene_generate_stock_video(request, pk, scene_number):
     import requests as http_requests
     from google import genai
     from django.core.files.base import ContentFile
-    from apps.accounts.models import APIKey
+    from apps.accounts.models import APIKey, FreepikAccount
 
     project = get_object_or_404(Project, pk=pk, user=request.user)
     scene = get_object_or_404(Scene, project=project, scene_number=scene_number)
 
-    # Freepik API 키
-    freepik_key_obj = APIKey.objects.filter(user=request.user, service='freepik', is_default=True).first()
-    if not freepik_key_obj:
-        freepik_key_obj = APIKey.objects.filter(user=request.user, service='freepik').first()
-    if not freepik_key_obj:
-        return JsonResponse({'success': False, 'message': 'Freepik API 키가 설정되지 않았습니다.'})
-    freepik_key = freepik_key_obj.get_key()
+    # Freepik 계정 (쿠키 기반)
+    freepik_account = FreepikAccount.objects.filter(user=request.user, is_active=True, cookie_expired=False).order_by('order').first()
+    if not freepik_account:
+        return JsonResponse({'success': False, 'message': 'Freepik 계정이 없습니다. 설정에서 쿠키를 등록해주세요.'})
+    freepik_cookie = freepik_account.get_cookie()
+    freepik_wallet = freepik_account.get_wallet_id()
 
     # Gemini 키 (키워드 추출 + 영상 선택)
     gemini_key_obj = APIKey.objects.filter(user=request.user, service='gemini', is_default=True).first()
@@ -1145,26 +1185,33 @@ Return exactly 2 lines, one keyword per line. No numbering, no explanation."""
             project.scenes.exclude(stock_video_id='').values_list('stock_video_id', flat=True)
         )
 
-        # 2. 검색 (무료만)
-        headers = {'x-freepik-api-key': freepik_key, 'Accept': 'application/json'}
+        # 2. 검색 (쿠키 기반 웹사이트 API)
+        web_headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Cookie': freepik_cookie,
+            'Referer': 'https://kr.freepik.com/',
+        }
         candidates = []
         seen_ids = set()
         for kw in keywords:
             resp = http_requests.get(
-                'https://api.freepik.com/v1/videos',
-                headers=headers,
-                params={'term': kw},
+                'https://kr.freepik.com/api/search/video',
+                headers=web_headers,
+                params={'term': kw, 'per_page': 20},
                 timeout=15
             )
             if resp.status_code == 200:
-                for v in resp.json().get('data', []):
+                data = resp.json()
+                items = data.get('items', data.get('data', []))
+                for v in items:
                     vid = str(v.get('id', ''))
                     if not vid or vid in used_ids or vid in seen_ids:
                         continue
                     seen_ids.add(vid)
                     candidates.append({
                         'id': vid,
-                        'name': v.get('name', ''),
+                        'name': v.get('name', v.get('title', '')),
                         'duration': v.get('duration', ''),
                     })
 
@@ -1209,11 +1256,10 @@ IMPORTANT: Return ONLY a single number from 1 to {len(candidates)}. Nothing else
         download_method = 'api'
 
         # 웹사이트 쿠키 다운로드 시도
-        cookie_obj = APIKey.objects.filter(user=request.user, service='freepik_cookie').first()
-        wallet_obj = APIKey.objects.filter(user=request.user, service='freepik_wallet').first()
-        if cookie_obj and wallet_obj:
-            cookie_str = cookie_obj.get_key()
-            wallet_id = wallet_obj.get_key()
+        # FreepikAccount에서 이미 가져온 쿠키/월렛 사용
+        if freepik_cookie and freepik_wallet:
+            cookie_str = freepik_cookie
+            wallet_id = freepik_wallet
             web_headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
                 'Accept': '*/*',

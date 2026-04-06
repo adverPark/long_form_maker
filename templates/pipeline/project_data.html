@@ -848,7 +848,7 @@
                     <form method="post" action="{% url 'pipeline:step_execute' project.pk 'scene_generator' %}" class="d-inline ajax-step-form">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm btn-outline-success" {% if scenes.count == 0 %}disabled{% endif %}>
-                            <i class="bi bi-images"></i> 이미지 생성하기
+                            <i class="bi bi-images"></i> 🎨 이미지 생성
                         </button>
                     </form>
 
@@ -856,19 +856,23 @@
                     <form method="post" action="{% url 'pipeline:step_execute' project.pk 'tts_generator' %}" class="d-inline ajax-step-form">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm btn-outline-info" {% if scenes.count == 0 %}disabled{% endif %}>
-                            <i class="bi bi-mic"></i> TTS 생성하기
+                            <i class="bi bi-mic"></i> 🎤 TTS 일괄
                         </button>
                     </form>
 
                     {% if project.freepik_interval %}
-                    <!-- 스톡 영상 -->
+                    <!-- 스톡 영상 (간격) -->
                     <form method="post" action="{% url 'pipeline:step_execute' project.pk 'freepik_video' %}" class="d-inline ajax-step-form">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-sm btn-outline-warning" {% if scenes.count == 0 %}disabled{% endif %}>
-                            <i class="bi bi-camera-video"></i> 스톡 영상 받기
+                            <i class="bi bi-camera-video"></i> 🎬 스톡 영상 (간격)
                         </button>
                     </form>
                     {% endif %}
+                    <!-- 스톡 영상 (타입별) -->
+                    <button class="btn btn-sm btn-outline-info" onclick="bulkStockByType()" {% if scenes.count == 0 %}disabled{% endif %}>
+                        <i class="bi bi-camera-video-fill"></i> 🎬 스톡 영상 일괄
+                    </button>
                 </div>
             </div>
 
@@ -917,6 +921,13 @@
                                    {% if scene.has_character %}checked{% endif %}
                                    onchange="toggleCharacter({{ scene.scene_number }}, this.checked)">
                         </label>
+                        <select class="form-select form-select-sm mt-1" style="font-size:0.65em; padding:1px 2px; width:auto;"
+                                onchange="updateVisualType({{ scene.scene_number }}, this.value)"
+                                title="비주얼 타입">
+                            <option value="slide" {% if scene.visual_type == "slide" %}selected{% endif %}>📊</option>
+                            <option value="image" {% if scene.visual_type == "image" %}selected{% endif %}>🎨</option>
+                            <option value="stock_video" {% if scene.visual_type == "stock_video" %}selected{% endif %}>🎬</option>
+                        </select>
                     </div>
                     <div class="scene-narration">
                         <div class="narration-text editable-text"
@@ -999,9 +1010,22 @@
                     </div>
                     <div class="scene-actions">
                         <div class="btn-group btn-group-sm">
+                            {% if scene.visual_type == "slide" %}
+                            <button class="btn {% if scene.image %}btn-outline-warning{% else %}btn-outline-info{% endif %}"
+                                    onclick="generateSlide({{ scene.scene_number }})"
+                                    title="슬라이드 생성">
+                                <i class="bi bi-easel"></i>
+                            </button>
+                            {% elif scene.visual_type == "stock_video" %}
+                            <button class="btn {% if scene.stock_video %}btn-outline-warning{% else %}btn-outline-info{% endif %}"
+                                    onclick="generateStockVideo({{ scene.scene_number }})"
+                                    title="스톡 영상 검색">
+                                <i class="bi bi-camera-video-fill"></i>
+                            </button>
+                            {% else %}
                             <button class="btn {% if scene.image %}btn-outline-warning{% else %}btn-outline-primary{% endif %}"
                                     onclick="generateSceneImage({{ scene.scene_number }}, 'pro')"
-                                    title="Pro 모델로 생성">
+                                    title="이미지 생성">
                                 <i class="bi bi-image"></i>
                             </button>
                             <button class="btn {% if scene.image %}btn-outline-warning{% else %}btn-outline-primary{% endif %} dropdown-toggle dropdown-toggle-split"
@@ -1014,6 +1038,7 @@
                                 <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'flux'); return false;">FLUX.1-schnell ($0.003)</a></li>
                                 <li><a class="dropdown-item" href="#" onclick="generateSceneImage({{ scene.scene_number }}, 'sdxl'); return false;">SDXL ($0.005)</a></li>
                             </ul>
+                            {% endif %}
                         </div>
                         <button class="btn btn-sm {% if scene.audio %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
                                 onclick="generateSceneTTS({{ scene.scene_number }})"
@@ -1907,6 +1932,60 @@ async function toggleCharacter(sceneNumber, hasCharacter) {
         }
     } catch (error) {
         alert('오류: ' + error.message);
+    }
+}
+
+// 비주얼 타입 변경
+async function updateVisualType(sceneNumber, visualType) {
+    try {
+        const formData = new FormData();
+        formData.append("visual_type", visualType);
+
+        const response = await fetch(`{% url "pipeline:scene_edit" project.pk 0 %}`.replace("/0/", `/${sceneNumber}/`), {
+            method: "POST",
+            headers: { "X-CSRFToken": "{{ csrf_token }}" },
+            body: formData
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            // 페이지 새로고침으로 버튼 UI 반영
+            location.reload();
+        } else {
+            alert(data.message || "저장 실패");
+        }
+    } catch (error) {
+        alert("오류: " + error.message);
+    }
+}
+
+// 슬라이드 생성 (placeholder - 추후 API 연동)
+async function generateSlide(sceneNumber) {
+    alert("슬라이드 생성 기능은 준비 중입니다. 씬 " + sceneNumber);
+}
+
+// 스톡 영상 타입별 일괄 생성
+async function bulkStockByType() {
+    if (!confirm('stock_video 타입 씬에 스톡 영상을 일괄 적용합니다. 진행할까요?')) return;
+
+    const btn = event.target.closest('button');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 진행중...';
+    btn.disabled = true;
+
+    try {
+        const response = await fetch('{% url "pipeline:bulk_stock_by_visual_type" project.pk %}', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+        });
+        const data = await response.json();
+        alert(data.message);
+        if (data.success) location.reload();
+    } catch (error) {
+        alert('오류: ' + error.message);
+    } finally {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
     }
 }
 

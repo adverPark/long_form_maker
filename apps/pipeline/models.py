@@ -325,6 +325,13 @@ class Scene(models.Model):
         ('outro', '아웃트로'),
     ]
 
+
+    VISUAL_TYPE_CHOICES = [
+        ("slide", "슬라이드"),
+        ("image", "AI 이미지"),
+        ("stock_video", "스톡 영상"),
+    ]
+
     SUBTITLE_STATUS_CHOICES = [
         ('none', '없음'),
         ('matched', '매칭됨'),
@@ -334,6 +341,10 @@ class Scene(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='scenes')
     scene_number = models.IntegerField(verbose_name="씬 번호")
     section = models.CharField(max_length=20, choices=SECTION_CHOICES, default='body_1', verbose_name="섹션")
+
+
+    # 비주얼 타입
+    visual_type = models.CharField(max_length=20, choices=VISUAL_TYPE_CHOICES, default="image", verbose_name="비주얼 타입")
 
     # 텍스트
     narration = models.TextField(verbose_name="나레이션 (자막용)")
@@ -584,8 +595,13 @@ class UploadInfo(models.Model):
             for item in self.timeline:
                 parts.append(f"{item['time']} {item['title']}")
 
-        # 면책문구 + 참고자료
-        parts.append("\n\n해당 영상은 투자를 권장하는 목적이 아니라 교육 목적으로 제작되었습니다.")
+        # 고정 링크
+        parts.append("\n\n━━━━━━━━━━━━━━━━━━━━━━")
+        parts.append("\n🔗 링크")
+        parts.append("▸ 애드버코더 공식카페: https://cafe.naver.com/advercoder")
+        parts.append("▸ 애드버코더AI: https://advercoder.com")
+        parts.append("▸ 블로그 자동화로 경제적 자유 얻기 시리즈: https://cafe.naver.com/f-e/cafes/31083775/menus/38?viewType=L")
+
         if self.references:
             parts.append(f"\n📚 참고자료\n{self.references}")
 

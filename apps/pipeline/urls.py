@@ -30,6 +30,7 @@ urlpatterns = [
     path('project/<int:pk>/scene/<int:scene_number>/add-after/', views.scene_add_after, name='scene_add_after'),
     path('project/<int:pk>/scene/<int:scene_number>/upload/', views.scene_upload_media, name='scene_upload_media'),
     path('project/<int:pk>/scene/<int:scene_number>/reorder/', views.scene_reorder, name='scene_reorder'),
+    path('project/<int:pk>/bulk-stock-by-type/', views.bulk_stock_by_visual_type, name='bulk_stock_by_visual_type'),
     path('project/<int:pk>/bulk-upload-images/', views.scene_bulk_upload_images, name='scene_bulk_upload_images'),
     path('project/<int:pk>/scene/<int:scene_number>/convert-tts/', views.scene_convert_tts, name='scene_convert_tts'),
     path('project/<int:pk>/scene/<int:scene_number>/generate-stock-video/', views.scene_generate_stock_video, name='scene_generate_stock_video'),
