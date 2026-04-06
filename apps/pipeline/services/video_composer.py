@@ -183,16 +183,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     self.log(f'씬 {scene_num} SRT 타이밍 없음', 'warning')
                     continue
 
-                # SRT에서 이미 매핑된 텍스트+타이밍을 직접 사용
+                # SRT에서 타이밍+텍스트 사용
                 word_timings = [{'word': t['text'], 'start': t['start'], 'end': t['end']} for t in timings]
 
-                # 문장 단위로 그룹화 (마침표/물음표/느낌표에서 끊기)
-                sentences = self._group_words_to_sentences(word_timings)
+                # 짧은 duration 보정
+                for wi in range(len(word_timings)):
+                    wt = word_timings[wi]
+                    dur = wt['end'] - wt['start']
+                    if dur < 0.15 and wi + 1 < len(word_timings):
+                        wt['end'] = word_timings[wi + 1]['start']
+                    elif dur < 0.15 and wi == len(word_timings) - 1:
+                        wt['end'] = wt['start'] + 0.3
 
-                # ASS 파일 생성
+                # SRT 단어 기준 문장 그룹화 (타이밍용)
+                srt_sentences = self._group_words_to_sentences(word_timings)
+
+                # narration 텍스트를 문장 단위로 분할 (표시용)
+                narration_sents = re.split(r'(?<=[.?!])\s+', narration.strip())
+                narration_sents = [s.strip() for s in narration_sents if s.strip()]
+                # 쉼표 분리도 적용 (SRT 그룹화와 맞추기 위해)
+                expanded_narr = []
+                for ns in narration_sents:
+                    if len(ns) > 25 and ',' in ns:
+                        parts = ns.split(',')
+                        for pi, p in enumerate(parts):
+                            p = p.strip()
+                            if pi < len(parts) - 1:
+                                p += ','
+                            if p:
+                                expanded_narr.append(p)
+                    else:
+                        expanded_narr.append(ns)
+
+                # ASS 파일 생성 - SRT 타이밍 + narration 텍스트
                 ass_content = self.ASS_HEADER
-                for s in sentences:
-                    highlighted = self._highlight_numbers(s['text'])
+                for si, s in enumerate(srt_sentences):
+                    # narration 문장이 있으면 사용, 없으면 SRT 텍스트
+                    if si < len(expanded_narr):
+                        display_text = expanded_narr[si]
+                    else:
+                        display_text = s['text']
+                    highlighted = self._highlight_numbers(display_text)
                     start = self._format_ass_time(s['start'])
                     end = self._format_ass_time(s['end'])
                     ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(960,980)}}{highlighted}\n"

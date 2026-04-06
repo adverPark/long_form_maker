@@ -125,18 +125,13 @@ class TTSGeneratorService(BaseStepService):
                     'warning'
                 )
 
-        # 1:1 매핑으로 새 SRT 생성 (가능한 만큼만)
+        # SRT 원본 텍스트+타이밍 그대로 유지 (단어 교체 안 함)
+        # WhisperX가 narration_tts 기준으로 정확한 타이밍을 잡았으므로
+        # 단어를 narration으로 바꾸면 타이밍이 깨짐 (단어 수 차이)
         mapped_entries = []
         for i, timing in enumerate(srt_timings):
-            if i < len(narration_words):
-                # 원본 단어로 교체
-                word = narration_words[i]
-            else:
-                # SRT가 narration보다 길면 초과분 무시 (중복 방지)
-                continue
-
             mapped_entries.append(
-                f'{i + 1}\n{timing["start"]} --> {timing["end"]}\n{word}\n'
+                f'{i + 1}\n{timing["start"]} --> {timing["end"]}\n{timing["text"]}\n'
             )
 
         mapped_srt = '\n'.join(mapped_entries)
