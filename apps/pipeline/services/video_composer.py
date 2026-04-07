@@ -35,7 +35,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Black Han Sans,75,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
+Style: Default,Black Han Sans,55,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -209,56 +209,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 # 2. narration을 같은 기준으로 문장 분리
                 narr_sentences = [s.strip() for s in re.split(r'(?<=[.?!])\s+', narration.strip()) if s.strip()]
                 
-                # 3. 문장 1:1 매칭 → ASS 생성
+                # 3. 문장 1:1 매칭 → ASS 생성 (문장 통째로, 쪼개지 않음)
                 ass_content = self.ASS_HEADER
                 for si, srt_sent in enumerate(srt_sentences):
-                    # narration 문장 텍스트 (없으면 SRT 텍스트 fallback)
                     if si < len(narr_sentences):
                         display_text = narr_sentences[si]
                     else:
                         display_text = ' '.join(w['word'] for w in srt_sent['words'])
                     
-                    # 긴 문장: SRT 단어 그룹의 실제 타이밍으로 쪼개기
-                    if len(display_text) > 30:
-                        # SRT 단어를 25자 기준으로 그룹화 (실제 타이밍)
-                        srt_groups = []
-                        grp_words = []
-                        grp_len = 0
-                        for w in srt_sent['words']:
-                            new_len = grp_len + len(w['word']) + (1 if grp_words else 0)
-                            if grp_words and new_len > 25:
-                                srt_groups.append({'start': grp_words[0]['start'], 'end': grp_words[-1]['end']})
-                                grp_words = []
-                                grp_len = 0
-                            grp_words.append(w)
-                            grp_len += len(w['word']) + (1 if grp_len > 0 else 0)
-                        if grp_words:
-                            srt_groups.append({'start': grp_words[0]['start'], 'end': grp_words[-1]['end']})
-                        
-                        # narration 텍스트를 같은 개수(N)로 단어 경계에서 분할
-                        n_groups = len(srt_groups)
-                        narr_words_list = display_text.split()
-                        chunk_size = max(1, len(narr_words_list) // n_groups)
-                        narr_chunks = []
-                        for gi in range(n_groups):
-                            if gi < n_groups - 1:
-                                chunk = ' '.join(narr_words_list[gi*chunk_size:(gi+1)*chunk_size])
-                            else:
-                                chunk = ' '.join(narr_words_list[gi*chunk_size:])
-                            narr_chunks.append(chunk)
-                        
-                        for gi, (srt_grp, narr_chunk) in enumerate(zip(srt_groups, narr_chunks)):
-                            if not narr_chunk.strip():
-                                continue
-                            highlighted = self._highlight_numbers(narr_chunk)
-                            start = self._format_ass_time(srt_grp['start'])
-                            end = self._format_ass_time(srt_grp['end'])
-                            ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(960,980)}}{highlighted}\n"
-                    else:
-                        highlighted = self._highlight_numbers(display_text)
-                        start = self._format_ass_time(srt_sent['start'])
-                        end = self._format_ass_time(srt_sent['end'])
-                        ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(960,980)}}{highlighted}\n"
+                    highlighted = self._highlight_numbers(display_text)
+                    start = self._format_ass_time(srt_sent['start'])
+                    end = self._format_ass_time(srt_sent['end'])
+                    ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(960,980)}}{highlighted}\n"
 
                 # 저장
                 ass_path = Path(settings.MEDIA_ROOT) / 'projects' / 'subtitles' / f'{self.project.pk}'
