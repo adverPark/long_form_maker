@@ -30,12 +30,12 @@ class VideoComposerService(BaseStepService):
     ASS_HEADER = """[Script Info]
 Title: Scene Subtitles
 ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: 3840
+PlayResY: 2160
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Black Han Sans,55,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
+Style: Default,Black Han Sans,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,4,4,10,2,10,10,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -220,7 +220,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     highlighted = self._highlight_numbers(display_text)
                     start = self._format_ass_time(srt_sent['start'])
                     end = self._format_ass_time(srt_sent['end'])
-                    ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(960,980)}}{highlighted}\n"
+                    ass_content += f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\pos(1920,1960)}}{highlighted}\n"
 
                 # 저장
                 ass_path = Path(settings.MEDIA_ROOT) / 'projects' / 'subtitles' / f'{self.project.pk}'
@@ -423,7 +423,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         # 기본 필터: fps=30 강제, 1080p 스케일, yuv420p
         # ⚠️ fps=30 필수! 이미지 클립과 파라미터 통일을 위해
-        base_filter = "fps=30,scale=1920:1080:flags=lanczos,format=yuv420p"
+        base_filter = "fps=30,scale=3840:2160:flags=lanczos,format=yuv420p"
 
         if ass_path:
             base_filter += f",ass={ass_path}"
@@ -478,7 +478,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         ]
         effect = effects[scene_num % len(effects)]
 
-        filter_complex = f"scale=8000:-1,zoompan={effect}:d={frames}:s=1920x1080:fps=30,format=yuv420p"
+        filter_complex = f"scale=8000:-1,zoompan={effect}:d={frames}:s=3840x2160:fps=30,format=yuv420p"
         if ass_path:
             filter_complex += f",ass={ass_path}"
 
