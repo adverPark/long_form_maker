@@ -300,13 +300,16 @@ class TTSGeneratorService(BaseStepService):
                                     scene.subtitle_word_count = srt_word_count
                                     scene.narration_word_count = narration_word_count
 
-                                    # 오디오 잘림 감지
+                                    # 오디오 잘림 감지 (narration_tts 단어 수 기준!)
+                                    # TTS가 narration_tts를 읽으니까 SRT도 narration_tts 기준
+                                    tts_text = scene.narration_tts or original_narration
+                                    tts_word_count = len(self._preprocess_for_tts(tts_text).split())
                                     is_truncated = False
-                                    if srt_word_count < narration_word_count:
+                                    if srt_word_count < tts_word_count:
                                         # 단어 누락 = 명확한 잘림
                                         is_truncated = True
                                         self._thread_log(
-                                            f'⚠️ 씬 {scene_num}: 오디오 잘림 - 단어 누락 ({narration_word_count - srt_word_count}개)',
+                                            f'⚠️ 씬 {scene_num}: 오디오 잘림 - 단어 누락 (TTS {tts_word_count}개 중 SRT {srt_word_count}개만 인식)',
                                             'warning'
                                         )
                                     elif is_valid:
