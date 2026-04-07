@@ -1132,8 +1132,8 @@ def scene_edit(request, pk, scene_number):
     if 'narration' in request.POST:
         narration = request.POST.get('narration', '').strip()
         scene.narration = narration
-        scene.narration_tts = convert_to_tts(narration)
-        updated_fields.extend(['narration', 'narration_tts'])
+        updated_fields.append('narration')
+        # narration_tts는 자동 변환하지 않음 (직접 수정)
 
     # narration_tts 직접 편집 (전달된 경우에만)
     if 'narration_tts' in request.POST and 'narration' not in request.POST:
@@ -1157,12 +1157,7 @@ def scene_edit(request, pk, scene_number):
             scene.visual_type = visual_type
             updated_fields.append('visual_type')
 
-    # regenerate_tts: 나레이션 변경 없이 TTS 텍스트만 재생성
-    if 'regenerate_tts' in request.POST and 'narration' not in request.POST:
-        if scene.narration:
-            scene.narration_tts = convert_to_tts(scene.narration)
-            if 'narration_tts' not in updated_fields:
-                updated_fields.append('narration_tts')
+    # regenerate_tts 제거됨 (자동 변환 사용 안 함)
 
     if updated_fields:
         scene.save(update_fields=updated_fields)
