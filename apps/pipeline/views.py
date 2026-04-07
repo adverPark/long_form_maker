@@ -920,13 +920,28 @@ def scene_generate_tts(request, pk, scene_number):
                 request_data['use_memory_cache'] = 'off'
 
             # 문장 분리 TTS
-            _sentences = re.split(r'(?<=[.?!])\s+', text.strip())
+            _raw = re.split(r'(?<=[.?!])\s+', text.strip())
             _final_sentences = []
-            for _s in _sentences:
-                if len(_s) > 40 and ',' in _s:
-                    _left, _right = _s.split(',', 1)
-                    _final_sentences.append(_left.strip() + ',')
-                    _final_sentences.append(_right.strip())
+            for _s in _raw:
+                _s = _s.strip()
+                if not _s:
+                    continue
+                if len(_s) > 30 and ',' in _s:
+                    _parts = _s.split(',')
+                    _buf = ''
+                    for _pi, _p in enumerate(_parts):
+                        _p = _p.strip()
+                        if _pi < len(_parts) - 1:
+                            _cand = (_buf + ' ' + _p + ',').strip() if _buf else _p + ','
+                        else:
+                            _cand = (_buf + ' ' + _p).strip() if _buf else _p
+                        if len(_cand) <= 30 or not _buf:
+                            _buf = _cand
+                        else:
+                            _final_sentences.append(_buf)
+                            _buf = _p + ',' if _pi < len(_parts) - 1 else _p
+                    if _buf:
+                        _final_sentences.append(_buf)
                 else:
                     _final_sentences.append(_s)
             _final_sentences = [_s for _s in _final_sentences if _s.strip()]

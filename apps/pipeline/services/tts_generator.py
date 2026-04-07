@@ -523,8 +523,33 @@ class TTSGeneratorService(BaseStepService):
         import wave
         
         # 문장 분리 (. ? ! 기준)
-        sentences = _re.split(r'(?<=[.?!])\s+', text.strip())
-        sentences = [s.strip() for s in sentences if s.strip()]
+        # 1차: 마침표/물음표/느낌표로 분리
+        raw = _re.split(r'(?<=[.?!])\s+', text.strip())
+        # 2차: 30자 넘는 문장은 쉼표로 재분리 (재귀)
+        sentences = []
+        for s in raw:
+            s = s.strip()
+            if not s:
+                continue
+            if len(s) > 30 and ',' in s:
+                parts = s.split(',')
+                buf = ''
+                for pi, p in enumerate(parts):
+                    p = p.strip()
+                    if pi < len(parts) - 1:
+                        candidate = (buf + ' ' + p + ',').strip() if buf else p + ','
+                    else:
+                        candidate = (buf + ' ' + p).strip() if buf else p
+                    if len(candidate) <= 30 or not buf:
+                        buf = candidate
+                    else:
+                        sentences.append(buf)
+                        buf = p + ',' if pi < len(parts) - 1 else p
+                if buf:
+                    sentences.append(buf)
+            else:
+                sentences.append(s)
+        sentences = [s for s in sentences if s.strip()]
         
         # 1문장이면 기존 방식
         if len(sentences) <= 1:
